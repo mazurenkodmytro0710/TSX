@@ -1,0 +1,20 @@
+- generic [ref=e3]:
+  - img [ref=e5]:
+    - generic [ref=e6]: T
+    - generic [ref=e8]: X
+  - heading "З поверненням" [level=1] [ref=e9]
+  - paragraph [ref=e10]: 6 місяців. Без виправдань.
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]: Email
+      - textbox "Email" [ref=e14]:
+        - /placeholder: your@email.com
+    - generic [ref=e15]:
+      - generic [ref=e16]: Пароль
+      - textbox "Пароль" [ref=e17]:
+        - /placeholder: ••••••••
+    - button "Увійти" [ref=e18] [cursor=pointer]
+  - paragraph [ref=e19]:
+    - text: Немає акаунту?
+    - link "Зареєструватись" [ref=e20] [cursor=pointer]:
+      - /url: /signup
