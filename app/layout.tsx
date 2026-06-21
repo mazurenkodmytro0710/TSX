@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import { Toaster } from "@/components/ui/Toaster";
+import { LangProviderWrapper } from "@/components/LangProviderWrapper";
 
 const geist = localFont({
   src: "./fonts/GeistVF.woff",
@@ -41,7 +42,7 @@ export default function RootLayout({
       <body className="font-sans antialiased bg-[#0a0a0a] text-white overflow-x-hidden">
         <ServiceWorkerRegistration />
         <Toaster />
-        {children}
+        <LangProviderWrapper>{children}</LangProviderWrapper>
       </body>
     </html>
   );

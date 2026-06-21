@@ -10,8 +10,8 @@ import type {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { LogOut, Trash2, Plus, ChevronDown, ChevronUp, Eye, EyeOff, Check } from "lucide-react";
+import { LogOut, Trash2, Plus, ChevronDown, ChevronUp, Eye, EyeOff, Check, ChevronRight } from "lucide-react";
+import { useLanguage, type Lang } from "@/lib/i18n";
 import { showToast } from "@/components/ui/Toaster";
 import { BottomSheet } from "@/components/layout/BottomSheet";
 import { cn } from "@/lib/utils";
@@ -41,6 +41,8 @@ const SKILL_EMOJIS = [
   "💰","🌿","🎨","📸","🔬","🤝","🌍","⭐","🔥","🚀",
 ];
 
+const MUSCLE_GROUPS = ["Груди","Спина","Ноги","Плечі","Біцепс","Трицепс","Прес","Інше"];
+
 export default function SettingsPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -56,7 +58,12 @@ export default function SettingsPage() {
     sleep_target_time: "23:00",
     daily_reminder_time: "20:00",
   });
-  const [pointB, setPointB] = useState({ body: "", money: "", social: "", skills: "" });
+  const { lang, setLang } = useLanguage();
+
+  // ── Custom exercise
+  const [addExerciseOpen, setAddExerciseOpen] = useState(false);
+  const [newExName, setNewExName] = useState("");
+  const [newExMuscle, setNewExMuscle] = useState("Інше");
 
   // ── Body
   const [calorieGoal, setCalorieGoal] = useState("2800");
@@ -135,12 +142,6 @@ export default function SettingsPage() {
         sleep_target_time: prof.sleep_target_time ?? "23:00",
         daily_reminder_time: prof.daily_reminder_time ?? "20:00",
       });
-      setPointB({
-        body: (prof.point_b as Record<string, string> | null)?.body ?? "",
-        money: (prof.point_b as Record<string, string> | null)?.money ?? "",
-        social: (prof.point_b as Record<string, string> | null)?.social ?? "",
-        skills: (prof.point_b as Record<string, string> | null)?.skills ?? "",
-      });
       setCalorieGoal(String(prof.calorie_goal ?? 2800));
       setProteinGoal(String(prof.protein_goal ?? 180));
       setGrokKey(prof.grok_api_key ?? "");
@@ -181,7 +182,6 @@ export default function SettingsPage() {
       goal_start_date: form.goal_start_date || null,
       sleep_target_time: form.sleep_target_time,
       daily_reminder_time: form.daily_reminder_time,
-      point_b: pointB,
     }).eq("id", user.id);
     setSaving(false);
     showToast("Профіль збережено ✓");
@@ -241,6 +241,25 @@ export default function SettingsPage() {
   async function removeExercise(teId: string) {
     await supabase.from("template_exercises").delete().eq("id", teId);
     await load();
+  }
+
+  async function addCustomExercise() {
+    if (!newExName.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("exercises").insert({
+      user_id: user.id, name: newExName.trim(), muscle_group: newExMuscle,
+    });
+    setNewExName(""); setNewExMuscle("Інше"); setAddExerciseOpen(false);
+    showToast("Вправу додано ✓");
+    await load();
+  }
+
+  async function deleteExercise(exId: string) {
+    if (!confirm("Видалити вправу?")) return;
+    await supabase.from("exercises").delete().eq("id", exId);
+    await load();
+    showToast("Вправу видалено");
   }
 
   // ── Skill functions
@@ -411,47 +430,56 @@ export default function SettingsPage() {
 
         {/* ════ ПРОФІЛЬ ════ */}
         {activeTab === "profile" && (
-          <div className="space-y-4">
-            <div>
-              <Label className="text-[#6b7280] text-xs">Ім&apos;я</Label>
-              <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="mt-1.5 bg-[#111111] border-white/10 text-white h-12" />
-            </div>
-            <div>
-              <Label className="text-[#6b7280] text-xs">Дата початку сезону</Label>
-              <Input type="date" value={form.goal_start_date} onChange={(e) => setForm((f) => ({ ...f, goal_start_date: e.target.value }))}
-                className="mt-1.5 bg-[#111111] border-white/10 text-white h-12" />
-            </div>
-            <div>
-              <Label className="text-[#6b7280] text-xs">Ціль — Point B (тіло)</Label>
-              <Textarea value={pointB.body} onChange={(e) => setPointB((p) => ({ ...p, body: e.target.value }))}
-                placeholder="Якого тіла хочу досягти?" rows={2}
-                className="mt-1.5 bg-[#111111] border-white/10 text-white placeholder:text-white/20 resize-none" />
-            </div>
-            <div>
-              <Label className="text-[#6b7280] text-xs">Ціль — Point B (фінанси)</Label>
-              <Textarea value={pointB.money} onChange={(e) => setPointB((p) => ({ ...p, money: e.target.value }))}
-                placeholder="Фінансова ціль?" rows={2}
-                className="mt-1.5 bg-[#111111] border-white/10 text-white placeholder:text-white/20 resize-none" />
-            </div>
-            <div>
-              <Label className="text-[#6b7280] text-xs">Ціль — Point B (скіли)</Label>
-              <Textarea value={pointB.skills} onChange={(e) => setPointB((p) => ({ ...p, skills: e.target.value }))}
-                placeholder="Яких навичок хочу досягти?" rows={2}
-                className="mt-1.5 bg-[#111111] border-white/10 text-white placeholder:text-white/20 resize-none" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-[#6b7280] text-xs">Час відбою</Label>
-                <Input type="time" value={form.sleep_target_time} onChange={(e) => setForm((f) => ({ ...f, sleep_target_time: e.target.value }))}
-                  className="mt-1.5 bg-[#111111] border-white/10 text-white h-12" />
+          <div className="space-y-3">
+            <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
+              <div className="px-4 py-3.5 flex items-center gap-3">
+                <p className="text-[#6b7280] text-xs w-28 shrink-0">Ім&apos;я</p>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  className="flex-1 bg-transparent text-white text-sm text-right outline-none"
+                />
               </div>
-              <div>
-                <Label className="text-[#6b7280] text-xs">Нагадування</Label>
-                <Input type="time" value={form.daily_reminder_time} onChange={(e) => setForm((f) => ({ ...f, daily_reminder_time: e.target.value }))}
-                  className="mt-1.5 bg-[#111111] border-white/10 text-white h-12" />
+              <div className="px-4 py-3.5 flex items-center gap-3">
+                <p className="text-[#6b7280] text-xs w-28 shrink-0">Дата початку</p>
+                <input
+                  type="date"
+                  value={form.goal_start_date}
+                  onChange={(e) => setForm((f) => ({ ...f, goal_start_date: e.target.value }))}
+                  className="flex-1 bg-transparent text-white text-sm text-right outline-none"
+                />
+              </div>
+              <div className="px-4 py-3.5 flex items-center gap-3">
+                <p className="text-[#6b7280] text-xs w-28 shrink-0">Час відбою</p>
+                <input
+                  type="time"
+                  value={form.sleep_target_time}
+                  onChange={(e) => setForm((f) => ({ ...f, sleep_target_time: e.target.value }))}
+                  className="flex-1 bg-transparent text-white text-sm text-right outline-none"
+                />
+              </div>
+              <div className="px-4 py-3.5 flex items-center gap-3">
+                <p className="text-[#6b7280] text-xs w-28 shrink-0">Нагадування</p>
+                <input
+                  type="time"
+                  value={form.daily_reminder_time}
+                  onChange={(e) => setForm((f) => ({ ...f, daily_reminder_time: e.target.value }))}
+                  className="flex-1 bg-transparent text-white text-sm text-right outline-none"
+                />
               </div>
             </div>
+
+            <button
+              onClick={() => router.push("/settings/goals")}
+              className="bg-[#111111] rounded-2xl px-4 py-4 flex items-center justify-between w-full"
+            >
+              <div className="text-left">
+                <p className="text-white text-sm font-medium">Мої цілі — Point B</p>
+                <p className="text-[#6b7280] text-xs mt-0.5">Тіло, Фінанси, Скіли</p>
+              </div>
+              <ChevronRight size={16} className="text-[#6b7280]" />
+            </button>
+
             <Button onClick={saveProfile} disabled={saving}
               className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
               {saving ? "Збереження..." : "Зберегти"}
@@ -477,6 +505,38 @@ export default function SettingsPage() {
             <Button onClick={saveBody} disabled={saving} className="w-full h-11 bg-[#00FF85] text-black font-bold rounded-2xl">
               {saving ? "..." : "Зберегти"}
             </Button>
+
+            <div className="border-t border-white/5 pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-white font-semibold text-sm">Всі вправи</p>
+                <button
+                  onClick={() => { setAddExerciseOpen(true); setNewExName(""); setNewExMuscle("Інше"); }}
+                  className="text-[#00FF85] flex items-center gap-1 text-xs font-semibold"
+                >
+                  <Plus size={14} /> Додати
+                </button>
+              </div>
+              <div className="space-y-1.5 mb-4">
+                {exercises.length === 0 && (
+                  <p className="text-[#6b7280] text-sm text-center py-3">Немає вправ</p>
+                )}
+                {exercises.map((ex) => (
+                  <div key={ex.id} className="bg-[#111111] rounded-xl px-4 py-2.5 flex items-center justify-between">
+                    <div>
+                      <p className="text-white text-sm">{ex.name}</p>
+                      <p className="text-[#6b7280] text-xs">{ex.muscle_group}</p>
+                    </div>
+                    {ex.user_id === profile?.id ? (
+                      <button onClick={() => deleteExercise(ex.id)} className="text-[#6b7280] active:text-[#ef4444] p-1">
+                        <Trash2 size={14} />
+                      </button>
+                    ) : (
+                      <span className="text-[#4b5563] text-xs px-1">🔒</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
 
             <div className="border-t border-white/5 pt-4">
               <div className="flex items-center justify-between mb-3">
@@ -809,6 +869,25 @@ export default function SettingsPage() {
         {/* ════ АКАУНТ ════ */}
         {activeTab === "account" && (
           <div className="space-y-3">
+            {/* Language switcher */}
+            <div className="bg-[#111111] rounded-2xl px-4 py-3.5 flex items-center justify-between">
+              <p className="text-white text-sm">Мова / Language</p>
+              <div className="flex gap-1.5">
+                {(["uk", "en"] as const).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLang(l)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-xl text-xs font-semibold transition-all",
+                      lang === l ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
+                    )}
+                  >
+                    {l === "uk" ? "🇺🇦 UA" : "🇬🇧 EN"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="bg-[#111111] rounded-2xl p-4">
               <p className="text-[#6b7280] text-xs mb-1">Email</p>
               <p className="text-white text-sm">{profile?.id ?? "—"}</p>
@@ -911,6 +990,43 @@ export default function SettingsPage() {
           <Button onClick={addSkill} disabled={!newSkillName.trim()}
             className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
             Створити скіл
+          </Button>
+        </div>
+      </BottomSheet>
+
+      {/* ── Add custom exercise ── */}
+      <BottomSheet open={addExerciseOpen} onClose={() => setAddExerciseOpen(false)} title="Нова вправа">
+        <div className="space-y-4 pb-6">
+          <Input
+            value={newExName}
+            onChange={(e) => setNewExName(e.target.value)}
+            placeholder="Жим лежачи"
+            autoFocus
+            className="bg-[#1a1a1a] border-white/10 text-white h-12"
+          />
+          <div>
+            <p className="text-[#6b7280] text-xs mb-2">Група м&apos;язів</p>
+            <div className="grid grid-cols-4 gap-2">
+              {MUSCLE_GROUPS.map((mg) => (
+                <button
+                  key={mg}
+                  onClick={() => setNewExMuscle(mg)}
+                  className={cn(
+                    "py-2.5 rounded-xl text-xs font-semibold transition-all",
+                    newExMuscle === mg ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
+                  )}
+                >
+                  {mg}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Button
+            onClick={addCustomExercise}
+            disabled={!newExName.trim()}
+            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl"
+          >
+            Створити вправу
           </Button>
         </div>
       </BottomSheet>
