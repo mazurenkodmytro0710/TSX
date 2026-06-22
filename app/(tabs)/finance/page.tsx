@@ -16,6 +16,19 @@ import { showToast } from "@/components/ui/Toaster";
 
 type TxType = "expense" | "income" | "transfer";
 
+function formatMoney(amount: number, currency: string): string {
+  const symbol = currency === "UAH" ? "₴" : currency === "USD" ? "$" : "€";
+  const formatted = new Intl.NumberFormat("uk-UA", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Math.abs(amount));
+  return `${symbol}${formatted}`;
+}
+
+function parseAmount(raw: string): number {
+  return parseFloat(raw.replace(",", ".")) || 0;
+}
+
 const TX_TYPES: { value: TxType; label: string }[] = [
   { value: "expense", label: "Витрата" },
   { value: "income", label: "Дохід" },
@@ -104,7 +117,7 @@ export default function FinancePage() {
   }
 
   async function saveTx() {
-    const rawAmount = parseFloat(txForm.amount);
+    const rawAmount = parseAmount(txForm.amount);
     if (!rawAmount || !txForm.accountId) return;
 
     const { data: { user } } = await supabase.auth.getUser();
@@ -232,7 +245,7 @@ export default function FinancePage() {
   }, {});
 
   const saveDisabled =
-    !txForm.amount ||
+    !parseAmount(txForm.amount) ||
     !txForm.accountId ||
     (txType === "transfer" && (!txForm.toAccountId || txForm.toAccountId === txForm.accountId));
 
@@ -252,7 +265,7 @@ export default function FinancePage() {
       <div className="flex gap-3 px-4 overflow-x-auto pb-2 scrollbar-hide">
         <div className="bg-[#111111] rounded-2xl p-4 min-w-[160px] h-[100px] shrink-0 flex flex-col justify-between border border-[#00FF85]/20">
           <p className="text-[#6b7280] text-xs">Загалом</p>
-          <p className="text-[#00FF85] font-black text-2xl">€{totalEur.toFixed(0)}</p>
+          <p className="text-[#00FF85] font-black text-2xl">{formatMoney(totalEur, "EUR")}</p>
         </div>
         {accounts.map((acc) => {
           const eur = toEur(acc.current_balance, acc.currency);
@@ -265,11 +278,10 @@ export default function FinancePage() {
               </div>
               <div>
                 <p className="text-white font-bold text-lg">
-                  {acc.currency === "UAH" ? "₴" : acc.currency === "USD" ? "$" : "€"}
-                  {acc.current_balance.toFixed(0)}
+                  {formatMoney(acc.current_balance, acc.currency)}
                 </p>
                 {acc.currency !== "EUR" && (
-                  <p className="text-[#6b7280] text-xs">≈ €{eur.toFixed(0)}</p>
+                  <p className="text-[#6b7280] text-xs">≈ {formatMoney(eur, "EUR")}</p>
                 )}
               </div>
             </div>
@@ -292,7 +304,7 @@ export default function FinancePage() {
               <p className="text-[#6b7280] text-xs uppercase tracking-wider">{date}</p>
               <p className={cn("text-xs font-semibold", txs.reduce((s, t) => s + t.amount, 0) < 0 ? "text-[#ef4444]" : "text-[#00FF85]")}>
                 {txs.reduce((s, t) => s + t.amount, 0) < 0 ? "-" : "+"}
-                €{Math.abs(txs.reduce((s, t) => s + (t.amount_eur ?? t.amount), 0)).toFixed(0)}
+                {formatMoney(Math.abs(txs.reduce((s, t) => s + (t.amount_eur ?? t.amount), 0)), "EUR")}
               </p>
             </div>
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
@@ -312,11 +324,10 @@ export default function FinancePage() {
                   <div className="text-right shrink-0">
                     <p className={cn("font-bold text-sm", tx.amount < 0 ? "text-[#ef4444]" : "text-[#00FF85]")}>
                       {tx.amount < 0 ? "-" : "+"}
-                      {tx.currency === "UAH" ? "₴" : tx.currency === "USD" ? "$" : "€"}
-                      {Math.abs(tx.amount).toFixed(0)}
+                      {formatMoney(tx.amount, tx.currency)}
                     </p>
                     {tx.amount_eur !== null && tx.currency !== "EUR" && (
-                      <p className="text-[#6b7280] text-xs">€{Math.abs(tx.amount_eur).toFixed(0)}</p>
+                      <p className="text-[#6b7280] text-xs">{formatMoney(tx.amount_eur ?? 0, "EUR")}</p>
                     )}
                   </div>
                   <button
@@ -378,7 +389,14 @@ export default function FinancePage() {
                 inputMode="decimal"
                 value={txForm.amount}
                 onChange={(e) => {
-                  const v = e.target.value.replace(/[^0-9.]/g, "");
+                  // Accept both comma and dot as decimal separator, digits only otherwise
+                  let v = e.target.value.replace(/[^0-9.,]/g, "");
+                  // Normalise: only one decimal separator allowed
+                  const norm = v.replace(",", ".");
+                  if ((norm.match(/\./g) ?? []).length > 1) {
+                    const parts = norm.split(".");
+                    v = parts[0] + "," + parts.slice(1).join("");
+                  }
                   setTxForm((f) => ({ ...f, amount: v }));
                 }}
                 placeholder="0"

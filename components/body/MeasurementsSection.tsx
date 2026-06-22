@@ -10,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import { showToast } from "@/components/ui/Toaster";
-import { Camera } from "lucide-react";
 
 const FIELDS: { key: keyof BodyMeasurement; label: string; unit: string }[] = [
   { key: "weight_kg", label: "Вага", unit: "кг" },
@@ -27,13 +26,13 @@ export function MeasurementsSection() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(0);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const supabase = createClient();
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -47,11 +46,32 @@ export function MeasurementsSection() {
     setMeasurements(data ?? []);
   }
 
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
+    // Reset input value so same file can be re-selected
+    e.target.value = "";
+  }
+
+  function startTimerPhoto() {
+    setCountdown(3);
+    const interval = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          cameraInputRef.current?.click();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }
+
+  function clearPhoto() {
+    setPhotoFile(null);
+    setPhotoPreview(null);
   }
 
   async function save() {
@@ -89,17 +109,13 @@ export function MeasurementsSection() {
     await load();
     setSheetOpen(false);
     setForm({});
-    setPhotoFile(null);
-    setPhotoPreview(null);
+    clearPhoto();
     setSaving(false);
     showToast("Виміри збережено ✓");
   }
 
   const latest = measurements[0];
-  const daysSince = latest
-    ? differenceInDays(new Date(), new Date(latest.date))
-    : null;
-
+  const daysSince = latest ? differenceInDays(new Date(), new Date(latest.date)) : null;
   const chartData = [...measurements].reverse().slice(-20).map((m) => ({
     date: m.date.slice(5),
     weight: m.weight_kg,
@@ -131,11 +147,8 @@ export function MeasurementsSection() {
             </div>
           </>
         ) : (
-          <p className="text-[#6b7280] text-sm text-center py-2">
-            Ще немає замірів
-          </p>
+          <p className="text-[#6b7280] text-sm text-center py-2">Ще немає замірів</p>
         )}
-
         {daysSince !== null && daysSince >= 7 && (
           <div className="mt-3 bg-[#f59e0b]/10 border border-[#f59e0b]/30 rounded-xl px-3 py-2">
             <p className="text-[#f59e0b] text-xs">⚠️ Час зробити тижневі заміри!</p>
@@ -158,23 +171,25 @@ export function MeasurementsSection() {
             <LineChart data={chartData}>
               <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
-              <Tooltip
-                contentStyle={{ background: "#1a1a1a", border: "none", borderRadius: "12px", color: "white", fontSize: 12 }}
-              />
+              <Tooltip contentStyle={{ background: "#1a1a1a", border: "none", borderRadius: "12px", color: "white", fontSize: 12 }} />
               <Line type="monotone" dataKey="weight" stroke="#00FF85" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       )}
 
-      <BottomSheet open={sheetOpen} onClose={() => { setSheetOpen(false); setPhotoFile(null); setPhotoPreview(null); }} title="Внести заміри">
+      <BottomSheet
+        open={sheetOpen}
+        onClose={() => { setSheetOpen(false); clearPhoto(); }}
+        title="Внести заміри"
+      >
         <div className="space-y-3 pb-6">
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.map(({ key, label, unit }) => (
               <div key={key as string}>
                 <Label className="text-[#6b7280] text-xs">{label} ({unit})</Label>
                 <Input
-                  type="number"
+                  type="text"
                   inputMode="decimal"
                   value={form[key as string] ?? ""}
                   onChange={(e) => setForm((f) => ({ ...f, [key as string]: e.target.value }))}
@@ -185,33 +200,62 @@ export function MeasurementsSection() {
             ))}
           </div>
 
-          {/* Photo */}
+          {/* Hidden file inputs */}
           <input
             ref={fileInputRef}
             type="file"
             accept="image/*"
+            className="hidden"
+            onChange={handlePhotoSelect}
+          />
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
             capture="environment"
             className="hidden"
-            onChange={handlePhotoChange}
+            onChange={handlePhotoSelect}
           />
-          {photoPreview ? (
-            <div className="relative">
+
+          {/* Photo section */}
+          {!photoPreview ? (
+            <div className="mt-2">
+              <p className="text-sm text-gray-400 mb-3">Фото прогресу</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5"
+                >
+                  <span className="text-2xl">🖼️</span>
+                  <span className="text-xs text-gray-500">З галереї</span>
+                </button>
+                <button
+                  onClick={startTimerPhoto}
+                  disabled={countdown > 0}
+                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5"
+                >
+                  {countdown > 0 ? (
+                    <span className="text-3xl font-bold text-[#00FF85]">{countdown}</span>
+                  ) : (
+                    <>
+                      <span className="text-2xl">📸</span>
+                      <span className="text-xs text-gray-500">Таймер 3с</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="relative mt-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={photoPreview} alt="preview" className="w-full h-40 object-cover rounded-xl" />
+              <img src={photoPreview} alt="preview" className="w-full h-[180px] object-cover rounded-2xl" />
               <button
-                onClick={() => { setPhotoFile(null); setPhotoPreview(null); }}
-                className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded-lg"
+                onClick={clearPhoto}
+                className="absolute top-2 right-2 w-8 h-8 bg-black/60 rounded-full flex items-center justify-center text-white text-sm"
               >
                 ✕
               </button>
             </div>
-          ) : (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full h-14 border border-dashed border-white/15 rounded-xl flex items-center justify-center gap-2 text-[#6b7280] text-sm"
-            >
-              <Camera size={16} /> Додати фото
-            </button>
           )}
 
           <Button

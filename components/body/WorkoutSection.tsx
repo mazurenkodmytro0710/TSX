@@ -3,33 +3,33 @@
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
-import type { WorkoutTemplate, WorkoutSession, WorkoutSet, Exercise, TemplateExercise } from "@/lib/types";
+import type { WorkoutTemplate, WorkoutSession, Exercise, TemplateExercise } from "@/lib/types";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, Plus, Minus, Check } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { ChevronRight, ChevronLeft, Plus, X } from "lucide-react";
 import { showToast } from "@/components/ui/Toaster";
 
 interface SetRow {
   setNumber: number;
   weight: string;
   reps: string;
-  saved: boolean;
+}
+
+interface ExerciseWithTemplate extends TemplateExercise {
+  exercise: Exercise;
 }
 
 export function WorkoutSection() {
   const [templates, setTemplates] = useState<WorkoutTemplate[]>([]);
-  const [todayTemplate, setTodayTemplate] = useState<WorkoutTemplate | null>(null);
-  const [templateExercises, setTemplateExercises] = useState<Array<TemplateExercise & { exercise: Exercise }>>([]);
+  const [activeTemplate, setActiveTemplate] = useState<WorkoutTemplate | null>(null);
+  const [templateExercises, setTemplateExercises] = useState<ExerciseWithTemplate[]>([]);
   const [session, setSession] = useState<WorkoutSession | null>(null);
   const [sets, setSets] = useState<Record<string, SetRow[]>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [lastWorkout, setLastWorkout] = useState<{ template_name: string; date: string } | null>(null);
   const supabase = createClient();
   const today = format(new Date(), "yyyy-MM-dd");
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -42,35 +42,51 @@ export function WorkoutSection() {
 
     setTemplates(tmpls ?? []);
 
-    // Determine today's template by rotating A→B→C
-    if (tmpls?.length) {
-      const { data: pastSessions } = await supabase
-        .from("workout_sessions")
-        .select("template_id")
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(10);
+    // Last workout (not today)
+    const { data: prevSess } = await supabase
+      .from("workout_sessions")
+      .select("*, template:workout_templates(name)")
+      .eq("user_id", user.id)
+      .neq("date", today)
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-      const lastTemplateId = pastSessions?.[0]?.template_id;
-      const lastIdx = lastTemplateId
-        ? tmpls.findIndex((t) => t.id === lastTemplateId)
-        : -1;
-      const nextIdx = (lastIdx + 1) % tmpls.length;
-      setTodayTemplate(tmpls[nextIdx]);
+    if (prevSess) {
+      setLastWorkout({
+        template_name: (prevSess.template as { name: string } | null)?.name ?? "—",
+        date: prevSess.date,
+      });
     }
 
-    if (sess) {
+    if (sess && tmpls) {
       setSession(sess);
-      await loadSessionSets(sess.id);
+      const tmpl = tmpls.find((t) => t.id === sess.template_id);
+      if (tmpl) {
+        setActiveTemplate(tmpl);
+        await loadTemplateExercises(tmpl.id);
+        await loadSessionSets(sess.id);
+      }
     }
 
     setLoading(false);
   }
 
+  async function loadTemplateExercises(templateId: string) {
+    const { data } = await supabase
+      .from("template_exercises")
+      .select("*, exercise:exercises(*)")
+      .eq("template_id", templateId)
+      .order("sort_order");
+    const items = (data ?? []) as ExerciseWithTemplate[];
+    setTemplateExercises(items);
+    return items;
+  }
+
   async function loadSessionSets(sessionId: string) {
     const { data } = await supabase
       .from("workout_sets")
-      .select("*, exercise:exercises(*)")
+      .select("*")
       .eq("session_id", sessionId)
       .order("set_number");
 
@@ -81,198 +97,215 @@ export function WorkoutSection() {
         setNumber: s.set_number,
         weight: s.weight_kg?.toString() ?? "",
         reps: s.reps?.toString() ?? "",
-        saved: true,
       });
     }
     setSets(grouped);
   }
 
-  async function startWorkout() {
-    if (navigator.vibrate) navigator.vibrate(10);
+  async function pickTemplate(tmpl: WorkoutTemplate) {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !todayTemplate) return;
+    if (!user) return;
+    if (navigator.vibrate) navigator.vibrate(10);
 
-    const { data: sess } = await supabase.from("workout_sessions").insert({
-      user_id: user.id,
-      template_id: todayTemplate.id,
-      date: today,
-      started_at: new Date().toISOString(),
-    }).select().single();
+    const { data: sess } = await supabase
+      .from("workout_sessions")
+      .insert({ user_id: user.id, template_id: tmpl.id, date: today, started_at: new Date().toISOString() })
+      .select()
+      .single();
 
     setSession(sess);
+    setActiveTemplate(tmpl);
 
-    const { data: texs } = await supabase
-      .from("template_exercises")
-      .select("*, exercise:exercises(*)")
-      .eq("template_id", todayTemplate.id)
-      .order("sort_order");
-
-    setTemplateExercises(texs ?? []);
-
+    const exs = await loadTemplateExercises(tmpl.id);
     const initSets: Record<string, SetRow[]> = {};
-    for (const te of texs ?? []) {
+    for (const te of exs) {
       const startW = te.starting_weight_kg > 0 ? te.starting_weight_kg.toString() : "";
-      initSets[te.exercise_id] = [{ setNumber: 1, weight: startW, reps: "", saved: false }];
+      initSets[te.exercise_id] = [{ setNumber: 1, weight: startW, reps: "" }];
     }
     setSets(initSets);
-  }
-
-  async function logSet(exerciseId: string, idx: number) {
-    if (navigator.vibrate) navigator.vibrate(10);
-    if (!session) return;
-    const row = sets[exerciseId]?.[idx];
-    if (!row) return;
-
-    await supabase.from("workout_sets").insert({
-      session_id: session.id,
-      exercise_id: exerciseId,
-      set_number: row.setNumber,
-      weight_kg: parseFloat(row.weight) || null,
-      reps: parseInt(row.reps) || null,
-    });
-
-    setSets((prev) => {
-      const rows = [...(prev[exerciseId] ?? [])];
-      rows[idx] = { ...rows[idx], saved: true };
-      return { ...prev, [exerciseId]: rows };
-    });
   }
 
   function addSet(exerciseId: string) {
     setSets((prev) => {
       const rows = prev[exerciseId] ?? [];
+      const last = rows[rows.length - 1];
       return {
         ...prev,
-        [exerciseId]: [...rows, { setNumber: rows.length + 1, weight: rows[rows.length - 1]?.weight ?? "", reps: rows[rows.length - 1]?.reps ?? "", saved: false }],
+        [exerciseId]: [
+          ...rows,
+          { setNumber: rows.length + 1, weight: last?.weight ?? "", reps: last?.reps ?? "" },
+        ],
       };
+    });
+  }
+
+  function removeSet(exerciseId: string, idx: number) {
+    setSets((prev) => {
+      const rows = [...(prev[exerciseId] ?? [])];
+      rows.splice(idx, 1);
+      return { ...prev, [exerciseId]: rows.map((r, i) => ({ ...r, setNumber: i + 1 })) };
     });
   }
 
   function updateSet(exerciseId: string, idx: number, field: "weight" | "reps", value: string) {
     setSets((prev) => {
       const rows = [...(prev[exerciseId] ?? [])];
-      rows[idx] = { ...rows[idx], [field]: value, saved: false };
+      rows[idx] = { ...rows[idx], [field]: value };
       return { ...prev, [exerciseId]: rows };
     });
   }
 
   async function finishWorkout() {
     if (!session) return;
-    await supabase.from("workout_sessions").update({
-      ended_at: new Date().toISOString(),
-    }).eq("id", session.id);
+
+    // Save all sets to DB
+    for (const [exerciseId, exSets] of Object.entries(sets)) {
+      // Delete previous sets for this exercise in this session (in case of re-finish)
+      await supabase.from("workout_sets").delete()
+        .eq("session_id", session.id)
+        .eq("exercise_id", exerciseId);
+
+      for (const row of exSets) {
+        if (!row.weight && !row.reps) continue;
+        await supabase.from("workout_sets").insert({
+          session_id: session.id,
+          exercise_id: exerciseId,
+          set_number: row.setNumber,
+          weight_kg: parseFloat(row.weight) || null,
+          reps: parseInt(row.reps) || null,
+        });
+      }
+    }
+
+    await supabase.from("workout_sessions")
+      .update({ ended_at: new Date().toISOString() })
+      .eq("id", session.id);
+
     if (navigator.vibrate) navigator.vibrate([10, 50, 20, 50, 10]);
     showToast("Тренування завершено 💪");
   }
 
-  if (loading) return <div className="py-8 text-center text-[#6b7280]">Завантаження...</div>;
+  if (loading) {
+    return <div className="py-8 text-center text-[#6b7280]">Завантаження...</div>;
+  }
 
-  if (!session) {
+  // ── Template selection
+  if (!activeTemplate) {
     return (
-      <div className="space-y-4 pb-6">
-        <div className="bg-[#111111] rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <p className="text-[#6b7280] text-xs">Сьогодні</p>
-            <p className="text-white font-bold text-lg">{todayTemplate?.name ?? "—"}</p>
-          </div>
-          <span className="bg-[#00FF85]/20 text-[#00FF85] text-xs font-semibold px-3 py-1 rounded-full">
-            Авто
-          </span>
+      <div className="px-4 pb-6">
+        <p className="text-gray-400 text-sm mb-4 mt-4">Яке тренування сьогодні?</p>
+
+        <div className="flex flex-col gap-3">
+          {templates.length === 0 && (
+            <p className="text-[#6b7280] text-sm text-center py-8">
+              Немає шаблонів. Додай в Налаштування → Тіло.
+            </p>
+          )}
+          {templates.map((tmpl) => (
+            <button
+              key={tmpl.id}
+              onClick={() => pickTemplate(tmpl)}
+              className="w-full bg-[#1a1a1a] rounded-2xl p-4 flex justify-between items-center border border-white/5 active:border-[#00FF85] transition-colors"
+            >
+              <div className="text-left">
+                <p className="text-white font-semibold">{tmpl.name}</p>
+              </div>
+              <ChevronRight size={20} className="text-gray-600" />
+            </button>
+          ))}
         </div>
 
-        <Button
-          onClick={startWorkout}
-          className="w-full h-14 bg-[#00FF85] text-black font-bold text-base rounded-2xl gap-2"
-        >
-          💪 Почати тренування
-        </Button>
+        {lastWorkout && (
+          <p className="text-xs text-gray-600 mt-4 text-center">
+            Останнє: {lastWorkout.template_name} — {format(new Date(lastWorkout.date), "d MMM")}
+          </p>
+        )}
       </div>
     );
   }
 
+  // ── Active workout
   return (
-    <div className="space-y-3 pb-6">
-      <div className="bg-[#111111] rounded-2xl p-4 flex items-center justify-between">
-        <div>
-          <p className="text-[#6b7280] text-xs">Активне тренування</p>
-          <p className="text-white font-bold">{todayTemplate?.name}</p>
-        </div>
-        <span className="text-[#00FF85] text-xs">🟢 LIVE</span>
+    <div className="px-4 pb-6">
+      {/* Header with back */}
+      <div className="flex items-center gap-3 mt-4 mb-6">
+        <button
+          onClick={() => { setActiveTemplate(null); setSession(null); setTemplateExercises([]); setSets({}); }}
+          className="text-gray-400"
+        >
+          <ChevronLeft size={20} />
+        </button>
+        <h2 className="text-white font-bold text-lg">{activeTemplate.name}</h2>
       </div>
 
+      {/* Exercises */}
       {templateExercises.map((te) => {
         const ex = te.exercise;
         const exSets = sets[te.exercise_id] ?? [];
-        const isExpanded = expanded[te.exercise_id] ?? true;
-        const savedCount = exSets.filter((s) => s.saved).length;
 
         return (
-          <div key={te.id} className="bg-[#111111] rounded-2xl overflow-hidden">
-            <button
-              onClick={() => setExpanded((p) => ({ ...p, [te.exercise_id]: !isExpanded }))}
-              className="w-full flex items-center justify-between p-4"
-            >
-              <div className="text-left">
-                <p className="text-white font-semibold">{ex.name}</p>
-                <p className="text-[#6b7280] text-xs">{ex.muscle_group} · {savedCount}/{exSets.length} підходів</p>
-              </div>
-              {isExpanded ? <ChevronUp size={18} className="text-[#6b7280]" /> : <ChevronDown size={18} className="text-[#6b7280]" />}
-            </button>
+          <div key={te.id} className="bg-[#1a1a1a] rounded-2xl p-4 mb-3">
+            <p className="text-white font-semibold mb-1">{ex.name}</p>
+            {te.starting_weight_kg > 0 && exSets.length > 0 && !exSets[0].weight && (
+              <p className="text-gray-600 text-xs mb-3">Стартова: {te.starting_weight_kg}кг</p>
+            )}
 
-            {isExpanded && (
-              <div className="px-4 pb-4 space-y-2">
-                {exSets.map((row, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="text-[#6b7280] text-xs w-5">{row.setNumber}</span>
-                    <div className="flex items-center gap-1 flex-1">
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        value={row.weight}
-                        onChange={(e) => updateSet(te.exercise_id, idx, "weight", e.target.value)}
-                        placeholder="кг"
-                        className="w-16 bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-sm text-center outline-none"
-                      />
-                      <span className="text-[#6b7280] text-xs">×</span>
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        value={row.reps}
-                        onChange={(e) => updateSet(te.exercise_id, idx, "reps", e.target.value)}
-                        placeholder="повт"
-                        className="w-16 bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-sm text-center outline-none"
-                      />
-                    </div>
-                    <button
-                      onClick={() => logSet(te.exercise_id, idx)}
-                      className={cn(
-                        "w-9 h-9 rounded-xl flex items-center justify-center transition-all",
-                        row.saved ? "bg-[#00FF85] text-black" : "bg-[#1a1a1a] text-[#6b7280]"
-                      )}
-                    >
-                      <Check size={16} strokeWidth={3} />
-                    </button>
-                  </div>
-                ))}
+            {exSets.map((row, i) => (
+              <div key={i} className="flex items-center gap-2 mb-2">
+                <span className="text-gray-600 text-sm w-6 text-center">{i + 1}</span>
 
-                <button
-                  onClick={() => addSet(te.exercise_id)}
-                  className="flex items-center gap-2 text-[#6b7280] text-sm py-1"
-                >
-                  <Plus size={14} /> Додати підхід
+                <div className="flex items-center bg-[#111] rounded-xl px-3 h-[44px] flex-1">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={row.weight}
+                    onChange={(e) => updateSet(te.exercise_id, i, "weight", e.target.value)}
+                    placeholder={te.starting_weight_kg > 0 ? te.starting_weight_kg.toString() : "0"}
+                    className="bg-transparent text-white text-center w-full outline-none text-sm"
+                  />
+                  <span className="text-gray-600 text-xs shrink-0">кг</span>
+                </div>
+
+                <span className="text-gray-600 text-sm">×</span>
+
+                <div className="flex items-center bg-[#111] rounded-xl px-3 h-[44px] w-[68px]">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={row.reps}
+                    onChange={(e) => updateSet(te.exercise_id, i, "reps", e.target.value)}
+                    placeholder="0"
+                    className="bg-transparent text-white text-center w-full outline-none text-sm"
+                  />
+                </div>
+
+                <button onClick={() => removeSet(te.exercise_id, i)} className="p-2">
+                  <X size={16} className="text-gray-600" />
                 </button>
               </div>
-            )}
+            ))}
+
+            <button
+              onClick={() => addSet(te.exercise_id)}
+              className="text-[#00FF85] text-sm mt-1"
+            >
+              + Підхід
+            </button>
           </div>
         );
       })}
 
-      <Button
+      {/* Add exercise to session (placeholder) */}
+      <button className="w-full py-3 text-gray-500 text-sm border border-dashed border-white/10 rounded-2xl mt-1 mb-2">
+        + Додати вправу до тренування
+      </button>
+
+      <button
         onClick={finishWorkout}
-        className="w-full h-14 bg-[#111111] border border-[#00FF85]/30 text-[#00FF85] font-bold text-base rounded-2xl"
+        className="w-full h-[56px] bg-[#00FF85] text-black font-bold rounded-2xl mt-4"
       >
-        Завершити тренування ✓
-      </Button>
+        Завершити тренування
+      </button>
     </div>
   );
 }
