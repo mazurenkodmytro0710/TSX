@@ -10,7 +10,7 @@ import type {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { LogOut, Trash2, Plus, ChevronDown, ChevronUp, Eye, EyeOff, Check, ChevronRight } from "lucide-react";
+import { LogOut, Trash2, Plus, ChevronDown, ChevronUp, Eye, EyeOff, Check, ChevronRight, Pencil } from "lucide-react";
 import { useLanguage, type Lang } from "@/lib/i18n";
 import { showToast } from "@/components/ui/Toaster";
 import { BottomSheet } from "@/components/layout/BottomSheet";
@@ -93,6 +93,8 @@ export default function SettingsPage() {
   // ── Finance
   const [financeSub, setFinanceSub] = useState<FinanceSub>("accounts");
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
+  const [editBalanceAccount, setEditBalanceAccount] = useState<FinanceAccount | null>(null);
+  const [editBalanceValue, setEditBalanceValue] = useState("");
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [newAccName, setNewAccName] = useState("");
   const [newAccCurrency, setNewAccCurrency] = useState<"UAH" | "EUR" | "USD">("EUR");
@@ -368,6 +370,18 @@ export default function SettingsPage() {
     await supabase.from("finance_accounts").delete().eq("id", id);
     await load();
     showToast("Видалено");
+  }
+
+  async function saveBalance() {
+    if (!editBalanceAccount) return;
+    const newBal = parseFloat(editBalanceValue.replace(",", "."));
+    if (isNaN(newBal)) return;
+    await supabase.from("finance_accounts")
+      .update({ current_balance: Math.round(newBal * 100) / 100 })
+      .eq("id", editBalanceAccount.id);
+    await load();
+    setEditBalanceAccount(null);
+    showToast("Баланс оновлено ✓");
   }
 
   // ── AI
@@ -729,9 +743,17 @@ export default function SettingsPage() {
                         <p className="text-[#6b7280] text-xs">{acc.currency} · {acc.current_balance}</p>
                       </div>
                     </div>
-                    <button onClick={() => deleteAccount(acc.id)} className="text-[#6b7280] active:text-[#ef4444] p-1">
-                      <Trash2 size={15} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => { setEditBalanceAccount(acc); setEditBalanceValue(String(acc.current_balance)); }}
+                        className="text-[#6b7280] active:text-[#00FF85] p-1"
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => deleteAccount(acc.id)} className="text-[#6b7280] active:text-[#ef4444] p-1">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <button
@@ -1069,6 +1091,34 @@ export default function SettingsPage() {
           <Button onClick={addAccount} disabled={!newAccName.trim()}
             className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
             Створити рахунок
+          </Button>
+        </div>
+      </BottomSheet>
+
+      {/* ── Edit Balance ── */}
+      <BottomSheet open={!!editBalanceAccount} onClose={() => setEditBalanceAccount(null)} title={`Баланс · ${editBalanceAccount?.name ?? ""}`}>
+        <div className="space-y-6 pb-6">
+          <div className="text-center">
+            <span className="text-5xl">{editBalanceAccount?.icon}</span>
+            <p className="text-[#6b7280] text-xs mt-2">{editBalanceAccount?.currency}</p>
+          </div>
+          <div className="bg-[#1a1a1a] rounded-2xl px-4 py-5 flex items-baseline justify-center gap-2">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={editBalanceValue}
+              onChange={(e) => setEditBalanceValue(e.target.value)}
+              autoFocus
+              className="bg-transparent text-white text-5xl font-black text-center outline-none border-none w-[200px] placeholder:text-white/20"
+              placeholder="0"
+            />
+            <span className="text-xl text-[#6b7280]">{editBalanceAccount?.currency}</span>
+          </div>
+          <Button
+            onClick={saveBalance}
+            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl"
+          >
+            Зберегти баланс
           </Button>
         </div>
       </BottomSheet>

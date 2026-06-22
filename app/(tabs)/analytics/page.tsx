@@ -3,8 +3,9 @@
 import { useState, useEffect } from "react";
 import { format, startOfWeek, endOfWeek, addWeeks, subDays } from "date-fns";
 import { uk } from "date-fns/locale";
-import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { BottomSheet } from "@/components/layout/BottomSheet";
 import type {
   AIReport,
   Skill,
@@ -57,6 +58,7 @@ export default function AnalyticsPage() {
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [aiReports, setAiReports] = useState<AIReport[]>([]);
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
+  const [drilldownCat, setDrilldownCat] = useState<{ id: string; name: string; icon: string } | null>(null);
   const supabase = createClient();
 
   const weekStart = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
@@ -450,16 +452,20 @@ export default function AnalyticsPage() {
                   const pct = totalExpenses > 0 ? Math.round((value / totalExpenses) * 100) : 0;
                   const cat = categories.find((c) => c.name === name);
                   return (
-                    <div key={name} className="flex items-center gap-3 px-4 py-3">
+                    <button
+                      key={name}
+                      onClick={() => setDrilldownCat({ id: cat?.id ?? name, name, icon: cat?.icon ?? "💡" })}
+                      className="w-full flex items-center gap-3 px-4 py-3 active:bg-white/5 transition-colors"
+                    >
                       <div
                         className="w-3 h-3 rounded-full shrink-0"
                         style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
                       />
                       <span className="text-lg shrink-0">{cat?.icon ?? "💡"}</span>
-                      <p className="text-white text-sm flex-1">{name}</p>
+                      <p className="text-white text-sm flex-1 text-left">{name}</p>
                       <p className="text-[#6b7280] text-xs">{pct}%</p>
                       <p className="text-white font-semibold text-sm shrink-0">€{value}</p>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -539,6 +545,52 @@ export default function AnalyticsPage() {
           )}
         </div>
       )}
+
+      {/* ── Category Drill-Down ── */}
+      <BottomSheet
+        open={!!drilldownCat}
+        onClose={() => setDrilldownCat(null)}
+        title={drilldownCat?.name ?? ""}
+      >
+        {drilldownCat && (() => {
+          const drillTxs = expenses.filter((tx) => tx.category?.id === drilldownCat.id || tx.category?.name === drilldownCat.name);
+          const drillTotal = drillTxs.reduce((s, t) => s + Math.abs(t.amount_eur ?? t.amount), 0);
+          return (
+            <div className="space-y-3 pb-6">
+              <div className="text-center py-2">
+                <span className="text-5xl">{drilldownCat.icon}</span>
+                <p className="text-[#ef4444] font-black text-3xl mt-3">€{Math.round(drillTotal)}</p>
+                <p className="text-[#6b7280] text-xs mt-1">{drillTxs.length} транзакцій</p>
+              </div>
+              {drillTxs.length > 0 && (
+                <div className="space-y-2">
+                  {drillTxs.map((tx) => {
+                    const pct = drillTotal > 0 ? Math.round((Math.abs(tx.amount_eur ?? tx.amount) / drillTotal) * 100) : 0;
+                    return (
+                      <div key={tx.id} className="bg-[#1a1a1a] rounded-xl px-4 py-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-white text-sm">{tx.description || tx.category?.name || "Витрата"}</p>
+                          <p className="text-[#ef4444] font-semibold text-sm">€{Math.abs(tx.amount_eur ?? tx.amount).toFixed(0)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                            <div className="h-full bg-[#ef4444] rounded-full" style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="text-[#6b7280] text-xs w-8 text-right">{pct}%</p>
+                        </div>
+                        <p className="text-[#6b7280] text-xs mt-1">{tx.date} · {tx.account?.name}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {drillTxs.length === 0 && (
+                <p className="text-[#6b7280] text-sm text-center py-4">Немає транзакцій</p>
+              )}
+            </div>
+          );
+        })()}
+      </BottomSheet>
     </div>
   );
 }

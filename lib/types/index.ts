@@ -202,6 +202,7 @@ export interface Transaction {
   user_id: string;
   account_id: string;
   category_id: string | null;
+  subcategory_id?: string | null;
   group_id: string | null;
   amount: number;
   currency: string;
@@ -212,6 +213,7 @@ export interface Transaction {
   created_at: string;
   account?: FinanceAccount;
   category?: ExpenseCategory;
+  subcategory?: ExpenseCategory;
   group?: ExpenseGroup;
 }
 

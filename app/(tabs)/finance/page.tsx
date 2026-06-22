@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
-import { Plus, ArrowRight, Trash2, Settings2 } from "lucide-react";
+import { Plus, ArrowRight, Trash2, Settings2, Search } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { FinanceAccount, Transaction, ExpenseCategory } from "@/lib/types";
 import { useCurrency } from "@/lib/hooks/useCurrency";
@@ -28,6 +28,7 @@ function formatMoney(amount: number, currency: string): string {
 function parseAmount(raw: string): number {
   return parseFloat(raw.replace(",", ".")) || 0;
 }
+const roundMoney = (n: number) => Math.round(n * 100) / 100;
 
 const TX_TYPES: { value: TxType; label: string }[] = [
   { value: "expense", label: "Витрата" },
@@ -40,6 +41,8 @@ export default function FinancePage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [subcategories, setSubcategories] = useState<ExpenseCategory[]>([]);
+  const [allSubcategories, setAllSubcategories] = useState<ExpenseCategory[]>([]);
+  const [subcategorySearch, setSubcategorySearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [userId, setUserId] = useState<string>("");
@@ -82,7 +85,7 @@ export default function FinancePage() {
     if (!user) return;
     setUserId(user.id);
 
-    const [{ data: acc }, { data: tx }, { data: cat }] = await Promise.all([
+    const [{ data: acc }, { data: tx }, { data: cat }, { data: allSubs }] = await Promise.all([
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("transactions")
         .select("*, account:finance_accounts(*), category:expense_categories(*)")
@@ -90,11 +93,13 @@ export default function FinancePage() {
         .order("date", { ascending: false })
         .limit(60),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
+      supabase.from("expense_categories").select("*").eq("user_id", user.id).not("parent_id", "is", null),
     ]);
 
     setAccounts(acc ?? []);
     setTransactions(tx ?? []);
     setCategories(cat ?? []);
+    setAllSubcategories(allSubs ?? []);
 
     if (acc?.[0]) {
       setTxForm((f) => ({ ...f, accountId: f.accountId || acc[0].id }));
@@ -152,10 +157,10 @@ export default function FinancePage() {
 
       await Promise.all([
         supabase.from("finance_accounts")
-          .update({ current_balance: (account?.current_balance ?? 0) - rawAmount })
+          .update({ current_balance: roundMoney((account?.current_balance ?? 0) - rawAmount) })
           .eq("id", txForm.accountId),
         supabase.from("finance_accounts")
-          .update({ current_balance: ((accounts.find(a => a.id === txForm.toAccountId)?.current_balance) ?? 0) + rawAmount })
+          .update({ current_balance: roundMoney(((accounts.find(a => a.id === txForm.toAccountId)?.current_balance) ?? 0) + rawAmount) })
           .eq("id", txForm.toAccountId),
       ]);
     } else {
@@ -166,6 +171,7 @@ export default function FinancePage() {
         user_id: user.id,
         account_id: txForm.accountId,
         category_id: txForm.categoryId || null,
+        ...(txForm.subcategoryId ? { subcategory_id: txForm.subcategoryId } : {}),
         amount: signed,
         currency: account?.currency ?? "EUR",
         amount_eur: amountEur,
@@ -174,7 +180,7 @@ export default function FinancePage() {
       });
 
       await supabase.from("finance_accounts")
-        .update({ current_balance: (account?.current_balance ?? 0) + signed })
+        .update({ current_balance: roundMoney((account?.current_balance ?? 0) + signed) })
         .eq("id", txForm.accountId);
     }
 
@@ -183,6 +189,23 @@ export default function FinancePage() {
     resetForm();
     showToast("Збережено ✓");
     if (navigator.vibrate) navigator.vibrate(10);
+  }
+
+  async function addSubcategoryInline(name: string) {
+    if (!txForm.categoryId || !userId) return;
+    const { data: newSub } = await supabase.from("expense_categories").insert({
+      user_id: userId,
+      name: name.trim(),
+      icon: "📌",
+      color: "#6b7280",
+      parent_id: txForm.categoryId,
+    }).select().single();
+    if (newSub) {
+      setSubcategories((prev) => [...prev, newSub]);
+      setAllSubcategories((prev) => [...prev, newSub]);
+      setTxForm((f) => ({ ...f, subcategoryId: newSub.id }));
+      setSubcategorySearch("");
+    }
   }
 
   function resetForm() {
@@ -197,6 +220,7 @@ export default function FinancePage() {
       date: format(new Date(), "yyyy-MM-dd"),
     });
     setSubcategories([]);
+    setSubcategorySearch("");
   }
 
   async function deleteTx(tx: Transaction) {
@@ -204,7 +228,7 @@ export default function FinancePage() {
     await supabase.from("transactions").delete().eq("id", tx.id);
     if (account) {
       await supabase.from("finance_accounts")
-        .update({ current_balance: account.current_balance - tx.amount })
+        .update({ current_balance: roundMoney(account.current_balance - tx.amount) })
         .eq("id", tx.account_id);
     }
     await load();
@@ -308,7 +332,11 @@ export default function FinancePage() {
               </p>
             </div>
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
-              {txs.map((tx) => (
+              {txs.map((tx) => {
+                const subcat = tx.subcategory_id ? allSubcategories.find(s => s.id === tx.subcategory_id) : null;
+                const primaryLabel = subcat?.name ?? tx.description ?? tx.category?.name ?? (tx.amount < 0 ? "Витрата" : "Дохід");
+                const subtitleLabel = subcat ? tx.category?.name : tx.account?.name;
+                return (
                 <div key={tx.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="w-9 h-9 rounded-xl bg-[#1a1a1a] flex items-center justify-center shrink-0">
                     <span className="text-lg">
@@ -316,10 +344,8 @@ export default function FinancePage() {
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm font-medium truncate">
-                      {tx.description || tx.category?.name || (tx.amount < 0 ? "Витрата" : "Дохід")}
-                    </p>
-                    <p className="text-[#6b7280] text-xs truncate">{tx.account?.name}</p>
+                    <p className="text-white text-sm font-medium truncate">{primaryLabel}</p>
+                    <p className="text-[#6b7280] text-xs truncate">{subtitleLabel}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <p className={cn("font-bold text-sm", tx.amount < 0 ? "text-[#ef4444]" : "text-[#00FF85]")}>
@@ -337,7 +363,8 @@ export default function FinancePage() {
                     <Trash2 size={14} />
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ))}
@@ -517,27 +544,55 @@ export default function FinancePage() {
                       <span className="text-[10px] font-medium text-[#6b7280]">Нова</span>
                     </button>
                   </div>
-                  {subcategories.length > 0 && (
-                    <div className="flex gap-2 mt-2 overflow-x-auto scrollbar-hide pb-1">
-                      {subcategories.map((s) => (
-                        <button
-                          key={s.id}
-                          onClick={() =>
-                            setTxForm((f) => ({
-                              ...f,
-                              subcategoryId: f.subcategoryId === s.id ? "" : s.id,
-                            }))
-                          }
-                          className={cn(
-                            "shrink-0 px-3 py-1.5 rounded-full text-xs border transition-all",
-                            txForm.subcategoryId === s.id
-                              ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]"
-                              : "border-white/10 text-[#6b7280]"
-                          )}
-                        >
-                          {s.name}
-                        </button>
-                      ))}
+                  {txForm.categoryId && (
+                    <div className="mt-2">
+                      <div className="relative mb-1.5">
+                        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7280]" />
+                        <input
+                          type="text"
+                          value={subcategorySearch}
+                          onChange={(e) => setSubcategorySearch(e.target.value)}
+                          placeholder="Підкатегорія..."
+                          className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl pl-8 pr-3 py-2 text-sm text-white placeholder:text-gray-600 outline-none"
+                        />
+                      </div>
+                      <div className="max-h-[160px] overflow-y-auto space-y-1">
+                        {subcategories
+                          .filter((s) => s.name.toLowerCase().includes(subcategorySearch.toLowerCase()))
+                          .map((s) => (
+                            <button
+                              key={s.id}
+                              onClick={() => setTxForm((f) => ({ ...f, subcategoryId: f.subcategoryId === s.id ? "" : s.id }))}
+                              className={cn(
+                                "w-full text-left px-3 py-2 rounded-xl text-sm transition-all",
+                                txForm.subcategoryId === s.id
+                                  ? "bg-[#00FF85]/15 text-[#00FF85] border border-[#00FF85]/30"
+                                  : "text-white/70 bg-[#1a1a1a]"
+                              )}
+                            >
+                              {s.name}
+                            </button>
+                          ))}
+                        {subcategorySearch.trim() && !subcategories.find((s) => s.name.toLowerCase() === subcategorySearch.trim().toLowerCase()) && (
+                          <button
+                            onClick={() => addSubcategoryInline(subcategorySearch.trim())}
+                            className="w-full text-left px-3 py-2 rounded-xl text-sm text-[#00FF85] bg-[#00FF85]/5 border border-dashed border-[#00FF85]/30"
+                          >
+                            + Додати &quot;{subcategorySearch.trim()}&quot;
+                          </button>
+                        )}
+                        {subcategories.length > 0 && (
+                          <button
+                            onClick={() => setTxForm((f) => ({ ...f, subcategoryId: "" }))}
+                            className="w-full text-left px-3 py-2 rounded-xl text-sm text-[#6b7280]"
+                          >
+                            Без підкатегорії
+                          </button>
+                        )}
+                        {subcategories.length === 0 && !subcategorySearch && (
+                          <p className="text-[#6b7280] text-xs px-3 py-2">Введи назву для створення підкатегорії</p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </>

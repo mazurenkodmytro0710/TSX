@@ -212,6 +212,7 @@ create table transactions (
   user_id uuid references auth.users,
   account_id uuid references finance_accounts,
   category_id uuid references expense_categories,
+  subcategory_id uuid references expense_categories,
   group_id uuid references expense_groups,
   amount numeric,
   currency text,
@@ -221,6 +222,7 @@ create table transactions (
   season_id uuid references seasons,
   created_at timestamptz default now()
 );
+-- If adding to existing DB: ALTER TABLE transactions ADD COLUMN IF NOT EXISTS subcategory_id uuid REFERENCES expense_categories(id);
 
 -- NOTES
 create table notes (
