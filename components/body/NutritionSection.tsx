@@ -5,6 +5,8 @@ import { format } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import type { NutritionLog } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { awardXP } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
 
 const STATUS_OPTIONS = [
   {
@@ -63,6 +65,9 @@ export function NutritionSection() {
       .select()
       .single();
     setLog(data);
+    if (status === "done") {
+      await awardXP(user.id, XP_REWARDS.NUTRITION_DONE, "Харчування виконано");
+    }
   }
 
   async function saveNote() {

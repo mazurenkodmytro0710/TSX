@@ -26,6 +26,16 @@ import {
 import { cn } from "@/lib/utils";
 
 type Tab = "overview" | "body" | "focus" | "finance" | "ai";
+type FinancePeriod = "7d" | "30d" | "90d" | "180d" | "all";
+type FinanceView = "expenses" | "income";
+
+const FINANCE_PERIODS: { value: FinancePeriod; label: string; days?: number }[] = [
+  { value: "7d", label: "7д", days: 7 },
+  { value: "30d", label: "30д", days: 30 },
+  { value: "90d", label: "90д", days: 90 },
+  { value: "180d", label: "180д", days: 180 },
+  { value: "all", label: "Все" },
+];
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "overview", label: "Огляд" },
@@ -59,6 +69,10 @@ export default function AnalyticsPage() {
   const [aiReports, setAiReports] = useState<AIReport[]>([]);
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const [drilldownCat, setDrilldownCat] = useState<{ id: string; name: string; icon: string } | null>(null);
+  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>("30d");
+  const [financeView, setFinanceView] = useState<FinanceView>("expenses");
+  const [financeTransactions, setFinanceTransactions] = useState<Transaction[]>([]);
+  const [allWorkouts, setAllWorkouts] = useState<WorkoutSession[]>([]);
   const supabase = createClient();
 
   const weekStart = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
@@ -66,6 +80,7 @@ export default function AnalyticsPage() {
   const weekLabel = `${format(weekStart, "d MMM", { locale: uk })} – ${format(weekEnd, "d MMM", { locale: uk })}`;
 
   useEffect(() => { load(); }, [weekOffset]);
+  useEffect(() => { loadFinance(); }, [financePeriod]);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -97,6 +112,32 @@ export default function AnalyticsPage() {
     setTransactions(tx ?? []);
     setCategories(cat ?? []);
     setAiReports(reps ?? []);
+
+    // Load 30-day workout history for body tab
+    const thirtyAgo = format(subDays(new Date(), 30), "yyyy-MM-dd");
+    const { data: wAll } = await supabase
+      .from("workout_sessions")
+      .select("*")
+      .eq("user_id", user.id)
+      .gte("date", thirtyAgo)
+      .order("date");
+    setAllWorkouts(wAll ?? []);
+  }
+
+  async function loadFinance() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const period = FINANCE_PERIODS.find((p) => p.value === financePeriod);
+    let query = supabase
+      .from("transactions")
+      .select("*, account:finance_accounts(*), category:expense_categories(*)")
+      .eq("user_id", user.id)
+      .order("date", { ascending: false });
+    if (period?.days) {
+      query = query.gte("date", format(subDays(new Date(), period.days), "yyyy-MM-dd"));
+    }
+    const { data } = await query;
+    setFinanceTransactions(data ?? []);
   }
 
   const totalDeepWork = deepWork.reduce((s, d) => s + d.duration_minutes, 0);
@@ -127,10 +168,12 @@ export default function AnalyticsPage() {
 
   const currentReport = aiReports.find((r) => r.week_start === format(weekStart, "yyyy-MM-dd"));
 
-  // Finance tab: spending by category (expenses only)
-  const expenses = transactions.filter((t) => t.amount < 0);
+  // Finance tab
+  const allExpenses = financeTransactions.filter((t) => t.amount < 0);
+  const allIncome = financeTransactions.filter((t) => t.amount > 0);
+  const activeTxs = financeView === "expenses" ? allExpenses : allIncome;
   const spendingByCategory: Record<string, number> = {};
-  expenses.forEach((t) => {
+  activeTxs.forEach((t) => {
     const catName = t.category?.name ?? "Інше";
     spendingByCategory[catName] = (spendingByCategory[catName] ?? 0) + Math.abs(t.amount_eur ?? t.amount);
   });
@@ -138,8 +181,21 @@ export default function AnalyticsPage() {
     .sort(([, a], [, b]) => b - a)
     .map(([name, value]) => ({ name, value: Math.round(value) }));
 
-  const totalExpenses = expenses.reduce((s, t) => s + Math.abs(t.amount_eur ?? t.amount), 0);
-  const totalIncome = transactions.filter((t) => t.amount > 0).reduce((s, t) => s + (t.amount_eur ?? t.amount), 0);
+  const totalExpenses = allExpenses.reduce((s, t) => s + Math.abs(t.amount_eur ?? t.amount), 0);
+  const totalIncome = allIncome.reduce((s, t) => s + (t.amount_eur ?? t.amount), 0);
+  const activeTotal = financeView === "expenses" ? totalExpenses : totalIncome;
+
+  // Workout frequency for body tab (last 30d)
+  const workoutChartData = Array.from({ length: 30 }, (_, i) => {
+    const d = subDays(new Date(), 29 - i);
+    const dateStr = format(d, "yyyy-MM-dd");
+    const count = allWorkouts.filter((w) => w.date === dateStr).length;
+    return { day: format(d, "d", { locale: uk }), count };
+  });
+  const totalWorkouts30d = allWorkouts.length;
+
+  // alias for drilldown (still using week's expenses)
+  const expenses = transactions.filter((t) => t.amount < 0);
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] pt-safe pb-4">
@@ -250,8 +306,34 @@ export default function AnalyticsPage() {
       {/* ── ТІЛО ── */}
       {tab === "body" && (
         <div className="px-4 space-y-4">
+          {/* Workout frequency */}
+          <div className="bg-[#111111] rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-white font-semibold text-sm">💪 Тренування (30д)</p>
+              <p className="text-[#00FF85] font-black">{totalWorkouts30d}</p>
+            </div>
+            {totalWorkouts30d > 0 ? (
+              <ResponsiveContainer width="100%" height={80}>
+                <BarChart data={workoutChartData} barSize={4}>
+                  <XAxis dataKey="day" tick={false} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{ background: "#1a1a1a", border: "none", borderRadius: "12px", color: "white", fontSize: 12 }}
+                    formatter={(v) => [v, "Тренувань"]}
+                  />
+                  <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                    {workoutChartData.map((entry, i) => (
+                      <Cell key={i} fill={entry.count > 0 ? "#00FF85" : "#1a1a1a"} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="text-[#6b7280] text-sm text-center py-2">Немає тренувань за 30 днів</p>
+            )}
+          </div>
+
           {bodyMeasurements.length === 0 ? (
-            <div className="text-center py-12">
+            <div className="text-center py-8">
               <p className="text-4xl mb-3">📏</p>
               <p className="text-[#6b7280] text-sm">Немає вимірів за останні 30 днів</p>
               <p className="text-[#6b7280] text-xs mt-1">Додай виміри у розділі Тіло</p>
@@ -404,26 +486,51 @@ export default function AnalyticsPage() {
       {/* ── ФІНАНСИ ── */}
       {tab === "finance" && (
         <div className="px-4 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-[#111111] rounded-2xl p-4">
-              <p className="text-[#6b7280] text-xs mb-1">💸 Витрати</p>
-              <p className="text-[#ef4444] font-black text-xl">€{totalExpenses.toFixed(0)}</p>
-            </div>
-            <div className="bg-[#111111] rounded-2xl p-4">
-              <p className="text-[#6b7280] text-xs mb-1">💰 Дохід</p>
-              <p className="text-[#00FF85] font-black text-xl">€{totalIncome.toFixed(0)}</p>
-            </div>
+          {/* Period selector */}
+          <div className="flex gap-1.5">
+            {FINANCE_PERIODS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setFinancePeriod(p.value)}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-xs font-semibold transition-all",
+                  financePeriod === p.value ? "bg-[#00FF85] text-black" : "bg-[#111111] text-[#6b7280]"
+                )}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Income / Expense toggle */}
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#1a1a1a] rounded-2xl">
+            <button
+              onClick={() => setFinanceView("expenses")}
+              className={cn("py-2.5 rounded-xl text-sm font-semibold transition-all",
+                financeView === "expenses" ? "bg-[#ef4444] text-white" : "text-[#6b7280]")}
+            >
+              💸 Витрати €{totalExpenses.toFixed(0)}
+            </button>
+            <button
+              onClick={() => setFinanceView("income")}
+              className={cn("py-2.5 rounded-xl text-sm font-semibold transition-all",
+                financeView === "income" ? "bg-[#00FF85] text-black" : "text-[#6b7280]")}
+            >
+              💰 Дохід €{totalIncome.toFixed(0)}
+            </button>
           </div>
 
           {pieData.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-4xl mb-3">💸</p>
-              <p className="text-[#6b7280] text-sm">Немає витрат за цей тиждень</p>
+              <p className="text-[#6b7280] text-sm">Немає даних за цей період</p>
             </div>
           ) : (
             <>
               <div className="bg-[#111111] rounded-2xl p-4 flex flex-col items-center">
-                <p className="text-white font-semibold text-sm mb-3 self-start">Витрати по категоріях</p>
+                <p className="text-white font-semibold text-sm mb-3 self-start">
+                  {financeView === "expenses" ? "Витрати" : "Дохід"} по категоріях
+                </p>
                 <ResponsiveContainer width="100%" height={180}>
                   <PieChart>
                     <Pie
@@ -449,12 +556,12 @@ export default function AnalyticsPage() {
 
               <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
                 {pieData.map(({ name, value }, i) => {
-                  const pct = totalExpenses > 0 ? Math.round((value / totalExpenses) * 100) : 0;
+                  const pct = activeTotal > 0 ? Math.round((value / activeTotal) * 100) : 0;
                   const cat = categories.find((c) => c.name === name);
                   return (
                     <button
                       key={name}
-                      onClick={() => setDrilldownCat({ id: cat?.id ?? name, name, icon: cat?.icon ?? "💡" })}
+                      onClick={() => financeView === "expenses" && setDrilldownCat({ id: cat?.id ?? name, name, icon: cat?.icon ?? "💡" })}
                       className="w-full flex items-center gap-3 px-4 py-3 active:bg-white/5 transition-colors"
                     >
                       <div
@@ -464,7 +571,7 @@ export default function AnalyticsPage() {
                       <span className="text-lg shrink-0">{cat?.icon ?? "💡"}</span>
                       <p className="text-white text-sm flex-1 text-left">{name}</p>
                       <p className="text-[#6b7280] text-xs">{pct}%</p>
-                      <p className="text-white font-semibold text-sm shrink-0">€{value}</p>
+                      <p className={cn("font-semibold text-sm shrink-0", financeView === "expenses" ? "text-[#ef4444]" : "text-[#00FF85]")}>€{value}</p>
                     </button>
                   );
                 })}

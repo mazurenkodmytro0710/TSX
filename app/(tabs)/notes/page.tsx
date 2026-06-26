@@ -2,9 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import { format } from "date-fns";
-import { Plus, Mic, MicOff } from "lucide-react";
+import { Plus, Mic, MicOff, ImageIcon } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import type { Note, Skill } from "@/lib/types";
+import { awardXP, checkNoteAchievements } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
 import { BottomSheet } from "@/components/layout/BottomSheet";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -30,8 +32,10 @@ export default function NotesPage() {
     date: format(new Date(), "yyyy-MM-dd"),
   });
   const [isRecording, setIsRecording] = useState(false);
+  const [notePhoto, setNotePhoto] = useState<{ file: File; preview: string } | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const supabase = createClient();
 
   useEffect(() => {
@@ -86,16 +90,30 @@ export default function NotesPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user || !form.content.trim()) return;
 
+    let photoUrl: string | null = null;
+    if (notePhoto?.file) {
+      const ext = notePhoto.file.name.split(".").pop() ?? "jpg";
+      const path = `${user.id}/${Date.now()}.${ext}`;
+      const { error } = await supabase.storage.from("note-photos").upload(path, notePhoto.file);
+      if (!error) {
+        photoUrl = supabase.storage.from("note-photos").getPublicUrl(path).data.publicUrl;
+      }
+    }
+
     await supabase.from("notes").insert({
       user_id: user.id,
       type: form.type,
       content: form.content.trim(),
       linked_skill_id: form.linkedSkillId || null,
       date: form.date,
+      ...(photoUrl ? { photo_url: photoUrl } : {}),
     });
 
+    await awardXP(user.id, XP_REWARDS.NOTE_ADDED, "Нотатка додана");
+    await checkNoteAchievements(user.id, false);
     await load();
     setAddOpen(false);
+    setNotePhoto(null);
     setForm({ type: "thought", content: "", linkedSkillId: "", date: format(new Date(), "yyyy-MM-dd") });
     if (navigator.vibrate) navigator.vibrate(10);
   }
@@ -163,11 +181,20 @@ export default function NotesPage() {
               <span className="text-[#6b7280] text-xs">{note.date.slice(5).replace("-", ".")}</span>
             </div>
             <p className="text-white text-sm leading-relaxed">{note.content}</p>
+            {(note as Note & { photo_url?: string }).photo_url && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={(note as Note & { photo_url?: string }).photo_url!}
+                alt=""
+                className="w-full h-[140px] object-cover rounded-xl mt-2"
+                onClick={() => window.open((note as Note & { photo_url?: string }).photo_url!, "_blank")}
+              />
+            )}
           </div>
         ))}
       </div>
 
-      <BottomSheet open={addOpen} onClose={() => { setAddOpen(false); stopRecording(); }} title="Нова нотатка">
+      <BottomSheet open={addOpen} onClose={() => { setAddOpen(false); stopRecording(); setNotePhoto(null); }} title="Нова нотатка">
         <div className="space-y-4 pb-6">
           {/* Type selector */}
           <div className="flex gap-2">
@@ -209,6 +236,32 @@ export default function NotesPage() {
 
           {isRecording && (
             <p className="text-[#ef4444] text-xs text-center animate-pulse">🎤 Запис...</p>
+          )}
+
+          {/* Photo attachment */}
+          <input ref={photoInputRef} type="file" accept="image/*" className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) setNotePhoto({ file, preview: URL.createObjectURL(file) });
+            }}
+          />
+          {notePhoto ? (
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={notePhoto.preview} alt="" className="w-full h-[160px] object-cover rounded-2xl" />
+              <button
+                onClick={() => setNotePhoto(null)}
+                className="absolute top-2 right-2 w-7 h-7 bg-black/60 rounded-full flex items-center justify-center text-white text-xs"
+              >✕</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => photoInputRef.current?.click()}
+              className="flex items-center gap-2 text-[#6b7280] text-sm py-1"
+            >
+              <ImageIcon size={16} />
+              <span>Додати фото з галереї</span>
+            </button>
           )}
 
           {/* Link to skill */}

@@ -5,13 +5,15 @@ import { format } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import type { Skill, Habit, DailyLog } from "@/lib/types";
 import { useDeepWorkTimer } from "@/lib/hooks/useDeepWorkTimer";
-import { Play, Square, PlusCircle, ChevronDown, ChevronUp } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { awardXP, checkAllHabitsDoneToday } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
+import { PlusCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BottomSheet } from "@/components/layout/BottomSheet";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 
 export default function FocusPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -22,11 +24,10 @@ export default function FocusPage() {
   const [numValues, setNumValues] = useState<Record<string, string>>({});
   const [addSkillOpen, setAddSkillOpen] = useState(false);
   const [newSkill, setNewSkill] = useState({ name: "", icon: "⭐", habits: [""] });
-  const [manualHours, setManualHours] = useState("");
-  const [showManual, setShowManual] = useState(false);
+  const [deepWorkHours, setDeepWorkHours] = useState("");
   const supabase = createClient();
   const today = format(new Date(), "yyyy-MM-dd");
-  const { isRunning, elapsed, todayMinutes, start, stop, addManual, formatTime, formatMinutes } = useDeepWorkTimer();
+  const { todayMinutes, addManual, formatMinutes } = useDeepWorkTimer();
 
   useEffect(() => {
     load();
@@ -75,6 +76,12 @@ export default function FocusPage() {
       const without = prev.filter((l) => l.habit_id !== habit.id);
       return [...without, { id: "", user_id: user.id, habit_id: habit.id, date: today, completed, note: null, value: null, created_at: "" }];
     });
+
+    if (completed) {
+      await awardXP(user.id, XP_REWARDS.HABIT_COMPLETED, "Звичка виконана");
+      const allDone = await checkAllHabitsDoneToday(user.id);
+      if (allDone) await awardXP(user.id, XP_REWARDS.ALL_HABITS_DAY, "Всі звички за день");
+    }
   }
 
   async function saveHabitNote(habit: Habit) {
@@ -127,85 +134,44 @@ export default function FocusPage() {
     await load();
   }
 
-  const R = 100;
-  const C = 2 * Math.PI * R;
-  const maxSecs = 14400;
-  const progress = Math.min(elapsed / maxSecs, 1);
-
   return (
     <div className="min-h-screen bg-[#0a0a0a] pt-safe px-4">
       <header className="pt-4 pb-2">
         <h1 className="text-2xl font-black text-white">🧠 Фокус</h1>
       </header>
 
-      {/* Deep Work Timer */}
-      <div className="bg-[#111111] rounded-2xl p-5 mb-4 flex flex-col items-center gap-4">
-        <div className="relative w-[240px] h-[240px] mx-auto flex items-center justify-center">
-          <svg className="-rotate-90" width="240" height="240">
-            <circle cx="120" cy="120" r={R} fill="none" stroke="#1a1a1a" strokeWidth="10" />
-            <circle
-              cx="120" cy="120" r={R} fill="none" stroke="#00FF85" strokeWidth="10"
-              strokeLinecap="round"
-              strokeDasharray={C}
-              strokeDashoffset={C * (1 - progress)}
-              className="transition-all duration-1000"
-            />
-          </svg>
-          <div className="absolute text-center">
-            <p className={cn("text-4xl font-black tabular-nums", isRunning ? "text-[#00FF85]" : "text-white")}>
-              {formatTime(elapsed)}
-            </p>
-            <p className="text-[#6b7280] text-xs mt-1">
-              Сьогодні: ⚡ {formatMinutes(todayMinutes)}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex gap-3 w-full">
-          {!isRunning ? (
-            <Button
-              onClick={start}
-              className="flex-1 h-12 bg-[#00FF85] text-black font-bold rounded-2xl gap-2"
-            >
-              <Play size={18} fill="black" /> Старт
-            </Button>
-          ) : (
-            <Button
-              onClick={stop}
-              className="flex-1 h-12 bg-[#ef4444] text-white font-bold rounded-2xl gap-2"
-            >
-              <Square size={18} fill="white" /> Стоп
-            </Button>
-          )}
-          <button
-            onClick={() => setShowManual((v) => !v)}
-            className="w-12 h-12 rounded-2xl bg-[#1a1a1a] flex items-center justify-center text-[#6b7280]"
-          >
-            <PlusCircle size={20} />
-          </button>
-        </div>
-
-        {showManual && (
-          <div className="w-full flex gap-2 animate-fade-in">
-            <Input
+      {/* Manual Deep Work logging */}
+      <div className="bg-[#111111] rounded-2xl p-4 mb-4">
+        <p className="text-white font-semibold mb-1">⚡ Deep Work</p>
+        <p className="text-[#6b7280] text-xs mb-4">Скільки годин глибокої роботи сьогодні?</p>
+        <div className="flex items-center gap-3">
+          <div className="flex-1 bg-[#1a1a1a] rounded-xl h-[52px] flex items-center px-4">
+            <input
               type="number"
               inputMode="decimal"
-              value={manualHours}
-              onChange={(e) => setManualHours(e.target.value)}
-              placeholder="Годин (напр. 1.5)"
-              className="bg-[#1a1a1a] border-white/10 text-white h-11"
+              value={deepWorkHours}
+              onChange={(e) => setDeepWorkHours(e.target.value)}
+              placeholder="0"
+              className="bg-transparent text-white text-2xl font-bold w-full outline-none"
             />
-            <button
-              onClick={async () => {
-                await addManual(parseFloat(manualHours) || 0);
-                setManualHours("");
-                setShowManual(false);
-              }}
-              className="bg-[#00FF85] text-black rounded-xl px-4 font-bold"
-            >
-              ✓
-            </button>
+            <span className="text-[#6b7280] text-sm shrink-0">год</span>
           </div>
+          <Button
+            onClick={async () => {
+              const h = parseFloat(deepWorkHours);
+              if (!h || h <= 0) return;
+              await addManual(h);
+              setDeepWorkHours("");
+            }}
+            className="h-[52px] px-6 bg-[#00FF85] text-black font-semibold rounded-xl"
+          >
+            Зберегти
+          </Button>
+        </div>
+        {todayMinutes > 0 && (
+          <p className="text-[#00FF85] text-sm mt-3">
+            Сьогодні: {formatMinutes(todayMinutes)}
+          </p>
         )}
       </div>
 

@@ -24,6 +24,10 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+  .overscroll-contain {
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+  }
 }
 
 @layer base {

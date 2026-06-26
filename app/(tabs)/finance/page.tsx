@@ -13,6 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { showToast } from "@/components/ui/Toaster";
+import { awardXP, checkTransactionAchievements } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
 
 type TxType = "expense" | "income" | "transfer";
 
@@ -90,8 +92,7 @@ export default function FinancePage() {
       supabase.from("transactions")
         .select("*, account:finance_accounts(*), category:expense_categories(*)")
         .eq("user_id", user.id)
-        .order("date", { ascending: false })
-        .limit(60),
+        .order("date", { ascending: false }),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).not("parent_id", "is", null),
     ]);
@@ -184,6 +185,8 @@ export default function FinancePage() {
         .eq("id", txForm.accountId);
     }
 
+    await awardXP(user.id, XP_REWARDS.FINANCE_TRANSACTION, "Транзакція записана");
+    await checkTransactionAchievements(user.id);
     await load();
     setAddOpen(false);
     resetForm();

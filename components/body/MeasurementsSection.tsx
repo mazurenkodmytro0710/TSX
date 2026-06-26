@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import { showToast } from "@/components/ui/Toaster";
+import { awardXP, checkMeasurementAchievements } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
 
 const FIELDS: { key: keyof BodyMeasurement; label: string; unit: string }[] = [
   { key: "weight_kg", label: "Вага", unit: "кг" },
@@ -106,6 +108,8 @@ export function MeasurementsSection() {
       photo_url: photoUrl,
     });
 
+    await awardXP(user.id, XP_REWARDS.MEASUREMENTS_LOGGED, "Заміри внесено");
+    await checkMeasurementAchievements(user.id);
     await load();
     setSheetOpen(false);
     setForm({});

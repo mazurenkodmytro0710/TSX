@@ -93,6 +93,16 @@ export async function unlockAchievement(userId: string, key: AchievementKey): Pr
   return true;
 }
 
+export async function checkAllHabitsDoneToday(userId: string): Promise<boolean> {
+  const supabase = createClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: habits } = await supabase.from("habits").select("id").eq("user_id", userId).eq("is_active", true);
+  if (!habits || habits.length === 0) return false;
+  const { data: logs } = await supabase.from("daily_logs").select("habit_id").eq("user_id", userId).eq("date", today).eq("completed", true);
+  const doneIds = new Set((logs ?? []).map((l) => l.habit_id));
+  return habits.every((h) => doneIds.has(h.id));
+}
+
 export async function checkHabitAchievements(userId: string, streak: number) {
   if (streak >= 3)   await unlockAchievement(userId, "streak_3");
   if (streak >= 7)   await unlockAchievement(userId, "streak_7");

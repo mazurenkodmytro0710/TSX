@@ -7,6 +7,8 @@ import type { WorkoutTemplate, WorkoutSession, Exercise, TemplateExercise } from
 import { Button } from "@/components/ui/button";
 import { ChevronRight, ChevronLeft, Plus, X } from "lucide-react";
 import { showToast } from "@/components/ui/Toaster";
+import { awardXP, checkWorkoutAchievements } from "@/lib/achievements";
+import { XP_REWARDS } from "@/lib/xp";
 
 interface SetRow {
   setNumber: number;
@@ -107,11 +109,24 @@ export function WorkoutSection() {
     if (!user) return;
     if (navigator.vibrate) navigator.vibrate(10);
 
-    const { data: sess } = await supabase
+    // Reuse existing session for today if present
+    const { data: existing } = await supabase
       .from("workout_sessions")
-      .insert({ user_id: user.id, template_id: tmpl.id, date: today, started_at: new Date().toISOString() })
-      .select()
-      .single();
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("template_id", tmpl.id)
+      .eq("date", today)
+      .maybeSingle();
+
+    let sess = existing;
+    if (!sess) {
+      const { data: created } = await supabase
+        .from("workout_sessions")
+        .insert({ user_id: user.id, template_id: tmpl.id, date: today, started_at: new Date().toISOString() })
+        .select()
+        .single();
+      sess = created;
+    }
 
     setSession(sess);
     setActiveTemplate(tmpl);
@@ -180,6 +195,12 @@ export function WorkoutSection() {
     await supabase.from("workout_sessions")
       .update({ ended_at: new Date().toISOString() })
       .eq("id", session.id);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await awardXP(user.id, XP_REWARDS.WORKOUT_LOGGED, "Тренування записано");
+      await checkWorkoutAchievements(user.id);
+    }
 
     if (navigator.vibrate) navigator.vibrate([10, 50, 20, 50, 10]);
     showToast("Тренування завершено 💪");

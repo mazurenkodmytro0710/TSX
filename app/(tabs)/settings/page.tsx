@@ -264,6 +264,19 @@ export default function SettingsPage() {
     showToast("Вправу видалено");
   }
 
+  // ── Skill edit
+  const [editSkill, setEditSkill] = useState<Skill | null>(null);
+  const [editSkillName, setEditSkillName] = useState("");
+  const [editSkillEmoji, setEditSkillEmoji] = useState("⭐");
+
+  async function saveEditSkill() {
+    if (!editSkill || !editSkillName.trim()) return;
+    await supabase.from("skills").update({ name: editSkillName.trim(), icon: editSkillEmoji }).eq("id", editSkill.id);
+    setEditSkill(null);
+    showToast("Скіл оновлено ✓");
+    await load();
+  }
+
   // ── Skill functions
   async function addSkill() {
     if (!newSkillName.trim()) return;
@@ -635,6 +648,12 @@ export default function SettingsPage() {
                     </button>
                     <button onClick={() => setExpandedSkillId(isOpen ? null : skill.id)} className="text-[#6b7280]">
                       {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                    <button
+                      onClick={() => { setEditSkill(skill); setEditSkillName(skill.name); setEditSkillEmoji(skill.icon); }}
+                      className="text-[#6b7280] active:text-[#00FF85] p-1"
+                    >
+                      <Pencil size={15} />
                     </button>
                     <button onClick={() => deleteSkill(skill.id)} className="text-[#6b7280] active:text-[#ef4444] p-1">
                       <Trash2 size={15} />
@@ -1012,6 +1031,31 @@ export default function SettingsPage() {
           <Button onClick={addSkill} disabled={!newSkillName.trim()}
             className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
             Створити скіл
+          </Button>
+        </div>
+      </BottomSheet>
+
+      {/* ── Edit skill ── */}
+      <BottomSheet open={!!editSkill} onClose={() => setEditSkill(null)} title="Редагувати скіл">
+        <div className="space-y-4 pb-6">
+          <div>
+            <p className="text-[#6b7280] text-xs mb-2">Іконка</p>
+            <div className="grid grid-cols-10 gap-1.5">
+              {SKILL_EMOJIS.map((e) => (
+                <button key={e} onClick={() => setEditSkillEmoji(e)}
+                  className={cn("h-9 rounded-xl flex items-center justify-center text-lg border transition-all",
+                    editSkillEmoji === e ? "border-[#00FF85] bg-[#00FF85]/10" : "border-white/10 bg-[#1a1a1a]")}>
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Input value={editSkillName} onChange={(e) => setEditSkillName(e.target.value)}
+            placeholder="Назва скіла"
+            className="bg-[#1a1a1a] border-white/10 text-white h-12" />
+          <Button onClick={saveEditSkill} disabled={!editSkillName.trim()}
+            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
+            Зберегти
           </Button>
         </div>
       </BottomSheet>

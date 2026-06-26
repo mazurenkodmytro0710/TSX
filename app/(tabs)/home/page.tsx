@@ -16,7 +16,8 @@ import { BottomSheet } from "@/components/layout/BottomSheet";
 import { DeepWorkTimerSheet } from "@/components/home/DeepWorkTimerSheet";
 import { showToast } from "@/components/ui/Toaster";
 import { getQuoteOfDay } from "@/lib/quotes";
-import { getLevelInfo } from "@/lib/xp";
+import { getLevelInfo, XP_REWARDS } from "@/lib/xp";
+import { awardXP, checkAllHabitsDoneToday } from "@/lib/achievements";
 
 type SkillStatus = "pending" | "done" | "failed";
 
@@ -115,7 +116,14 @@ export default function HomePage() {
       { user_id: user.id, habit_id: habit.id, date: today, completed },
       { onConflict: "user_id,habit_id,date" }
     );
-    if (completed) showToast(`${habit.name} ✓`);
+    if (completed) {
+      showToast(`${habit.name} ✓`);
+      const newLevel = await awardXP(user.id, XP_REWARDS.HABIT_COMPLETED, "Звичка виконана");
+      if (newLevel > 0) setLevelUp({ level: newLevel, name: "" });
+      const allDone = await checkAllHabitsDoneToday(user.id);
+      if (allDone) await awardXP(user.id, XP_REWARDS.ALL_HABITS_DAY, "Всі звички за день");
+      await loadData();
+    }
   }
 
   const dayNumber = profile?.goal_start_date
@@ -192,14 +200,12 @@ export default function HomePage() {
           <p className="text-white/60 text-sm italic leading-relaxed">&ldquo;{quote}&rdquo;</p>
         </div>
 
-        {/* Big Skills 2x2 */}
-        {skills.length > 0 && (
+        {/* Skills grid */}
+        {skills.length > 0 ? (
           <div>
-            <p className="text-[#6b7280] text-xs uppercase tracking-wider mb-2">
-              Великі скіли
-            </p>
+            <p className="text-[#6b7280] text-xs uppercase tracking-wider mb-2">Скіли</p>
             <div className="grid grid-cols-2 gap-3">
-              {skills.slice(0, 4).map((skill) => (
+              {skills.map((skill) => (
                 <SkillCard
                   key={skill.id}
                   skill={skill}
@@ -208,6 +214,12 @@ export default function HomePage() {
                 />
               ))}
             </div>
+          </div>
+        ) : (
+          <div className="bg-[#111111] rounded-2xl p-6 text-center">
+            <p className="text-3xl mb-2">🎯</p>
+            <p className="text-white font-semibold text-sm">Немає скілів</p>
+            <p className="text-[#6b7280] text-xs mt-1">Додай скіли в Налаштуваннях →</p>
           </div>
         )}
 
