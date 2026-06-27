@@ -352,6 +352,9 @@ export default function FinancePage() {
             </div>
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
               {txs.map((tx) => {
+                if (process.env.NODE_ENV !== "production") {
+                  console.log("[TX]", tx.date, "cat:", tx.category_id, "subcat:", tx.subcategory_id);
+                }
                 const txCat = allCategories.find((c) => c.id === tx.category_id);
                 const txSubcat = tx.subcategory_id ? allCategories.find((c) => c.id === tx.subcategory_id) : null;
                 const primaryLabel = txSubcat

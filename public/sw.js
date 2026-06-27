@@ -1,4 +1,4 @@
-const CACHE_NAME = "t6x-v1";
+const CACHE_NAME = "t6x-static-v2";
 const STATIC_ASSETS = [
   "/",
   "/manifest.json",
@@ -16,7 +16,11 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
     )
   );
   self.clients.claim();
@@ -25,13 +29,13 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Network-first for API calls
-  if (url.pathname.startsWith("/api/")) {
-    event.respondWith(
-      fetch(event.request).catch(() => new Response(JSON.stringify({ error: "offline" }), {
-        headers: { "Content-Type": "application/json" },
-      }))
-    );
+  // Never intercept Supabase or internal API requests — pass straight to network
+  if (
+    url.hostname.includes("supabase.co") ||
+    url.hostname.includes("supabase.com") ||
+    url.pathname.startsWith("/api/")
+  ) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
@@ -43,9 +47,12 @@ self.addEventListener("fetch", (event) => {
   ) {
     event.respondWith(
       caches.match(event.request).then((cached) =>
-        cached || fetch(event.request).then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+        cached ||
+        fetch(event.request).then((res) => {
+          if (res.ok && res.type === "basic" && event.request.method === "GET") {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+          }
           return res;
         })
       )
@@ -53,9 +60,13 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first for pages
+  // Network-first for pages — fall back to cache only if a cached version exists
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(() => {
+      return caches.match(event.request).then(
+        (cached) => cached || new Response("Offline", { status: 503 })
+      );
+    })
   );
 });
 
