@@ -93,7 +93,7 @@ export default function FinancePage() {
     if (!user) return;
     setUserId(user.id);
 
-    const [{ data: acc }, { data: tx }, { data: cat }] = await Promise.all([
+    const [{ data: acc }, { data: tx, error: txError }, { data: cat }] = await Promise.all([
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("transactions")
         .select("*, account:finance_accounts(*), category:expense_categories!category_id(*), subcategory:expense_categories!subcategory_id(id,name,icon)")
@@ -101,6 +101,10 @@ export default function FinancePage() {
         .order("date", { ascending: false }),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
     ]);
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Finance] userId:", user.id, "txCount:", tx?.length ?? 0, "error:", txError);
+    }
 
     setAccounts(acc ?? []);
     setTransactions(tx ?? []);

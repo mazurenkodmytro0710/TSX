@@ -108,6 +108,7 @@ export default function SettingsPage() {
   const [addCatOpen, setAddCatOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [newCatEmoji, setNewCatEmoji] = useState("🛒");
+  const [categoryType, setCategoryType] = useState<"expense" | "income">("expense");
 
   // ── AI
   const [grokKey, setGrokKey] = useState("");
@@ -130,7 +131,7 @@ export default function SettingsPage() {
     ] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).single(),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null).order("created_at"),
-      supabase.from("skills").select("*").eq("user_id", user.id).eq("is_active", true).order("sort_order"),
+      supabase.from("skills").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("habits").select("*").eq("user_id", user.id).eq("is_active", true),
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("ai_reports").select("generated_at").eq("user_id", user.id).order("generated_at", { ascending: false }).limit(1),
@@ -149,7 +150,25 @@ export default function SettingsPage() {
       setGrokKey(prof.grok_api_key ?? "");
     }
 
-    setCategories(cats ?? []);
+    const catList = cats ?? [];
+    setCategories(catList);
+
+    // Seed default income categories once if none exist
+    try {
+      if (catList.filter((c) => c.transaction_type === "income").length === 0) {
+        await supabase.from("expense_categories").insert([
+          { user_id: user.id, name: "Зарплата",    icon: "💼", color: "#00FF85", transaction_type: "income" },
+          { user_id: user.id, name: "Фріланс",     icon: "💻", color: "#00FF85", transaction_type: "income" },
+          { user_id: user.id, name: "Подарунок",   icon: "🎁", color: "#00FF85", transaction_type: "income" },
+          { user_id: user.id, name: "Повернення",  icon: "↩️", color: "#00FF85", transaction_type: "income" },
+          { user_id: user.id, name: "Інший дохід", icon: "💰", color: "#00FF85", transaction_type: "income" },
+        ]);
+        const { data: freshCats } = await supabase
+          .from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null).order("created_at");
+        setCategories(freshCats ?? []);
+      }
+    } catch { /* migration not yet run — column may not exist */ }
+
     setSkills(sk ?? []);
     setHabits(hab ?? []);
     setAccounts(accnts ?? []);
@@ -296,9 +315,14 @@ export default function SettingsPage() {
   async function deleteSkill(id: string) {
     if (!confirm("Видалити скіл і всі його звички?")) return;
     await supabase.from("habits").delete().eq("skill_id", id);
-    await supabase.from("skills").update({ is_active: false }).eq("id", id);
+    await supabase.from("skills").delete().eq("id", id);
     showToast("Скіл видалено");
     await load();
+  }
+
+  async function toggleSkillActive(skillId: string, active: boolean) {
+    await supabase.from("skills").update({ is_active: active }).eq("id", skillId);
+    setSkills((prev) => prev.map((s) => s.id === skillId ? { ...s, is_active: active } : s));
   }
 
   async function confirmAddHabit(skillId: string) {
@@ -332,7 +356,7 @@ export default function SettingsPage() {
     if (!newCatName.trim()) return;
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-    await supabase.from("expense_categories").insert({ user_id: user.id, name: newCatName.trim(), icon: newCatEmoji, color: "#6b7280", parent_id: null });
+    await supabase.from("expense_categories").insert({ user_id: user.id, name: newCatName.trim(), icon: newCatEmoji, color: "#6b7280", parent_id: null, transaction_type: categoryType });
     setNewCatName(""); setNewCatEmoji("🛒"); setAddCatOpen(false);
     await load();
     showToast("Категорію додано ✓");
@@ -649,6 +673,13 @@ export default function SettingsPage() {
                     <button onClick={() => setExpandedSkillId(isOpen ? null : skill.id)} className="text-[#6b7280]">
                       {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                     </button>
+                    {/* Visibility toggle */}
+                    <button
+                      onClick={() => toggleSkillActive(skill.id, !skill.is_active)}
+                      className={cn("relative w-10 h-5 rounded-full transition-colors shrink-0", skill.is_active ? "bg-[#00FF85]" : "bg-[#333]")}
+                    >
+                      <div className={cn("absolute top-0.5 w-4 h-4 bg-white rounded-full transition-transform", skill.is_active ? "right-0.5" : "left-0.5")} />
+                    </button>
                     <button
                       onClick={() => { setEditSkill(skill); setEditSkillName(skill.name); setEditSkillEmoji(skill.icon); }}
                       className="text-[#6b7280] active:text-[#00FF85] p-1"
@@ -787,23 +818,41 @@ export default function SettingsPage() {
             {/* Категорії */}
             {financeSub === "categories" && (
               <div className="space-y-2">
+                {/* Income / Expense toggle */}
+                <div className="grid grid-cols-2 gap-1 p-1 bg-[#1a1a1a] rounded-2xl">
+                  <button
+                    onClick={() => setCategoryType("expense")}
+                    className={cn("py-2 rounded-xl text-xs font-semibold transition-all",
+                      categoryType === "expense" ? "bg-[#00FF85] text-black" : "text-[#6b7280]")}
+                  >
+                    💸 Витрати
+                  </button>
+                  <button
+                    onClick={() => setCategoryType("income")}
+                    className={cn("py-2 rounded-xl text-xs font-semibold transition-all",
+                      categoryType === "income" ? "bg-[#00FF85] text-black" : "text-[#6b7280]")}
+                  >
+                    💰 Доходи
+                  </button>
+                </div>
                 <div className="flex justify-end">
                   <button onClick={() => setAddCatOpen(true)}
                     className="flex items-center gap-1 text-[#00FF85] text-xs font-semibold">
-                    <Plus size={14} /> Додати
+                    <Plus size={14} /> Додати {categoryType === "income" ? "дохід" : "витрату"}
                   </button>
                 </div>
                 <div className="bg-[#111111] rounded-2xl overflow-hidden">
-                  {categories.length === 0 && (
+                  {categories.filter((c) => (c.transaction_type ?? "expense") === categoryType).length === 0 && (
                     <div className="px-4 py-6 text-center">
                       <p className="text-[#6b7280] text-sm">Немає категорій</p>
                     </div>
                   )}
-                  {categories.map((cat, idx) => {
+                  {categories.filter((c) => (c.transaction_type ?? "expense") === categoryType).map((cat, idx) => {
+                    const filteredList = categories.filter((c) => (c.transaction_type ?? "expense") === categoryType);
                     const isExpanded = expandedCatId === cat.id;
                     const subs = subcatsMap[cat.id] ?? [];
                     return (
-                      <div key={cat.id} className={cn(idx < categories.length - 1 && "border-b border-white/5")}>
+                      <div key={cat.id} className={cn(idx < filteredList.length - 1 && "border-b border-white/5")}>
                         <div className="flex items-center gap-3 px-4 py-3.5">
                           <span className="text-xl shrink-0">{cat.icon}</span>
                           <p className="text-white text-sm font-medium flex-1">{cat.name}</p>
@@ -1168,7 +1217,7 @@ export default function SettingsPage() {
       </BottomSheet>
 
       {/* ── Add category ── */}
-      <BottomSheet open={addCatOpen} onClose={() => setAddCatOpen(false)} title="Нова категорія">
+      <BottomSheet open={addCatOpen} onClose={() => setAddCatOpen(false)} title={categoryType === "income" ? "Нова категорія доходу" : "Нова категорія витрат"}>
         <div className="space-y-5 pb-6">
           <div>
             <p className="text-[#6b7280] text-xs mb-2">Іконка</p>
