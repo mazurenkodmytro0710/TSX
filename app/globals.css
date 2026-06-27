@@ -91,3 +91,17 @@
     overflow-x: hidden;
   }
 }
+
+/* iOS: prevent zoom on input focus */
+input, textarea, select {
+  font-size: 16px !important;
+}
+
+/* Bottom sheet iOS scroll/drag fix */
+[data-slot="sheet-overlay"] {
+  touch-action: none;
+}
+[data-slot="sheet-content"] {
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}

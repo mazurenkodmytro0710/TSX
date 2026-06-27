@@ -43,7 +43,6 @@ export default function FinancePage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [subcategories, setSubcategories] = useState<ExpenseCategory[]>([]);
-  const [allSubcategories, setAllSubcategories] = useState<ExpenseCategory[]>([]);
   const [subcategorySearch, setSubcategorySearch] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
   const [addOpen, setAddOpen] = useState(false);
@@ -83,25 +82,29 @@ export default function FinancePage() {
     }
   }, [addOpen]);
 
+  // Reset category selection when switching income ↔ expense
+  useEffect(() => {
+    setTxForm((f) => ({ ...f, categoryId: "", subcategoryId: "" }));
+    setSubcategories([]);
+  }, [txType]);
+
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     setUserId(user.id);
 
-    const [{ data: acc }, { data: tx }, { data: cat }, { data: allSubs }] = await Promise.all([
+    const [{ data: acc }, { data: tx }, { data: cat }] = await Promise.all([
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
       supabase.from("transactions")
-        .select("*, account:finance_accounts(*), category:expense_categories(*)")
+        .select("*, account:finance_accounts(*), category:expense_categories!category_id(*), subcategory:expense_categories!subcategory_id(id,name,icon)")
         .eq("user_id", user.id)
         .order("date", { ascending: false }),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
-      supabase.from("expense_categories").select("*").eq("user_id", user.id).not("parent_id", "is", null),
     ]);
 
     setAccounts(acc ?? []);
     setTransactions(tx ?? []);
     setCategories(cat ?? []);
-    setAllSubcategories(allSubs ?? []);
 
     if (acc?.[0]) {
       setTxForm((f) => ({ ...f, accountId: f.accountId || acc[0].id }));
@@ -206,7 +209,6 @@ export default function FinancePage() {
     }).select().single();
     if (newSub) {
       setSubcategories((prev) => [...prev, newSub]);
-      setAllSubcategories((prev) => [...prev, newSub]);
       setTxForm((f) => ({ ...f, subcategoryId: newSub.id }));
       setSubcategorySearch("");
     }
@@ -263,6 +265,10 @@ export default function FinancePage() {
   const totalEur = accounts
     .filter((a) => a.include_in_total)
     .reduce((sum, a) => sum + toEur(a.current_balance, a.currency), 0);
+
+  const filteredCategories = txType === "income"
+    ? categories.filter((c) => c.transaction_type === "income")
+    : categories.filter((c) => c.transaction_type !== "income");
 
   const visibleTxs = transactions.slice(0, visibleCount);
   const grouped = visibleTxs.reduce<Record<string, Transaction[]>>((acc, tx) => {
@@ -338,9 +344,8 @@ export default function FinancePage() {
             </div>
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
               {txs.map((tx) => {
-                const subcat = tx.subcategory_id ? allSubcategories.find(s => s.id === tx.subcategory_id) : null;
-                const primaryLabel = subcat
-                  ? `${tx.category?.name ?? "?"} / ${subcat.name}`
+                const primaryLabel = tx.subcategory
+                  ? `${tx.category?.name ?? "?"} / ${tx.subcategory.name}`
                   : tx.category?.name ?? tx.description ?? (tx.amount < 0 ? "Витрата" : "Дохід");
                 const subtitleLabel = new Date(tx.date).toLocaleDateString("uk-UA", { day: "numeric", month: "short" });
                 return (
@@ -521,14 +526,16 @@ export default function FinancePage() {
           {txType !== "transfer" && (
             <div>
               <Label className="text-[#6b7280] text-xs mb-1.5 block">Категорія (необов&apos;язково)</Label>
-              {categories.length === 0 ? (
+              {filteredCategories.length === 0 ? (
                 <p className="text-[#6b7280] text-xs bg-[#1a1a1a] rounded-xl p-3">
-                  Додай категорії в Налаштування → Фінанси
+                  {txType === "income"
+                    ? "Додай категорії доходу в Налаштування → Фінанси"
+                    : "Додай категорії в Налаштування → Фінанси"}
                 </p>
               ) : (
                 <>
                   <div className="grid grid-cols-3 gap-2">
-                    {categories.map((c) => (
+                    {filteredCategories.map((c) => (
                       <button
                         key={c.id}
                         onClick={() => handleCategorySelect(c.id)}

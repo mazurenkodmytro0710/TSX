@@ -682,7 +682,7 @@ export default function AnalyticsPage() {
                     <div key={tx.id} className="bg-[#1a1a1a] rounded-xl px-4 py-3">
                       <div className="flex items-center justify-between mb-1.5">
                         <p className="text-white text-sm">{label}</p>
-                        <p className="font-semibold text-sm" style={{ color }}>€{Math.abs(tx.amount_eur ?? tx.amount).toFixed(0)}</p>
+                        <p className="font-semibold text-sm" style={{ color }}>{Math.abs(tx.amount).toFixed(0)} {tx.currency ?? "EUR"}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">

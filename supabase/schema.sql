@@ -193,6 +193,7 @@ create table expense_categories (
   icon text,
   color text,
   parent_id uuid references expense_categories,
+  transaction_type text default 'expense',
   created_at timestamptz default now()
 );
 

@@ -184,6 +184,7 @@ export interface ExpenseCategory {
   icon: string;
   color: string;
   parent_id: string | null;
+  transaction_type?: string;
   created_at: string;
   subcategories?: ExpenseCategory[];
 }
