@@ -27,9 +27,9 @@ export function useStreak() {
     setLoading(false);
   }, [supabase]);
 
-  const recalculate = useCallback(async () => {
+  const recalculate = useCallback(async (): Promise<number> => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) return 0;
 
     const { data: skills } = await supabase
       .from("skills")
@@ -37,7 +37,7 @@ export function useStreak() {
       .eq("user_id", user.id)
       .eq("is_active", true);
 
-    if (!skills?.length) return;
+    if (!skills?.length) return 0;
 
     const { data: habits } = await supabase
       .from("habits")
@@ -84,6 +84,7 @@ export function useStreak() {
       .eq("id", user.id);
 
     setStreak(currentStreak);
+    return currentStreak;
   }, [supabase]);
 
   const freeze = useCallback(async () => {

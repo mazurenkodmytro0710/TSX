@@ -132,12 +132,17 @@ export function WorkoutSection() {
     setActiveTemplate(tmpl);
 
     const exs = await loadTemplateExercises(tmpl.id);
-    const initSets: Record<string, SetRow[]> = {};
-    for (const te of exs) {
-      const startW = te.starting_weight_kg > 0 ? te.starting_weight_kg.toString() : "";
-      initSets[te.exercise_id] = [{ setNumber: 1, weight: startW, reps: "" }];
+    if (existing) {
+      // Reusing existing session — load its saved sets
+      await loadSessionSets(existing.id);
+    } else {
+      const initSets: Record<string, SetRow[]> = {};
+      for (const te of exs) {
+        const startW = te.starting_weight_kg > 0 ? te.starting_weight_kg.toString() : "";
+        initSets[te.exercise_id] = [{ setNumber: 1, weight: startW, reps: "" }];
+      }
+      setSets(initSets);
     }
-    setSets(initSets);
   }
 
   function addSet(exerciseId: string) {

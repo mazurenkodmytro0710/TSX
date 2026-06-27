@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { format, startOfWeek, endOfWeek, addWeeks, subDays } from "date-fns";
+import { useState, useEffect, useRef } from "react";
+import { format, subDays } from "date-fns";
 import { uk } from "date-fns/locale";
-import { ChevronLeft, ChevronRight, ChevronDown, X } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { BottomSheet } from "@/components/layout/BottomSheet";
+import { PeriodSelector, getPeriodFromDate, type Period } from "@/components/PeriodSelector";
 import type {
   AIReport,
   Skill,
@@ -26,16 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 
 type Tab = "overview" | "body" | "focus" | "finance" | "ai";
-type FinancePeriod = "7d" | "30d" | "90d" | "180d" | "all";
 type FinanceView = "expenses" | "income";
-
-const FINANCE_PERIODS: { value: FinancePeriod; label: string; days?: number }[] = [
-  { value: "7d", label: "7д", days: 7 },
-  { value: "30d", label: "30д", days: 30 },
-  { value: "90d", label: "90д", days: 90 },
-  { value: "180d", label: "180д", days: 180 },
-  { value: "all", label: "Все" },
-];
 
 const TABS: { value: Tab; label: string }[] = [
   { value: "overview", label: "Огляд" },
@@ -56,9 +48,17 @@ const BODY_FIELDS: { key: keyof BodyMeasurement; label: string; unit: string; co
 
 const PIE_COLORS = ["#00FF85", "#f59e0b", "#3b82f6", "#ef4444", "#8b5cf6", "#f97316", "#6b7280"];
 
+interface ExerciseProgress {
+  exercise_id: string;
+  name: string;
+  history: { date: string; maxWeight: number }[];
+  pr: number;
+  delta: number;
+}
+
 export default function AnalyticsPage() {
   const [tab, setTab] = useState<Tab>("overview");
-  const [weekOffset, setWeekOffset] = useState(0);
+  const [period, setPeriod] = useState<Period>("30d");
   const [skills, setSkills] = useState<Skill[]>([]);
   const [deepWork, setDeepWork] = useState<DeepWorkSession[]>([]);
   const [workouts, setWorkouts] = useState<WorkoutSession[]>([]);
@@ -69,37 +69,29 @@ export default function AnalyticsPage() {
   const [aiReports, setAiReports] = useState<AIReport[]>([]);
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
   const [drilldownCat, setDrilldownCat] = useState<{ id: string; name: string; icon: string } | null>(null);
-  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>("30d");
   const [financeView, setFinanceView] = useState<FinanceView>("expenses");
-  const [financeTransactions, setFinanceTransactions] = useState<Transaction[]>([]);
-  const [allWorkouts, setAllWorkouts] = useState<WorkoutSession[]>([]);
+  const [exerciseProgress, setExerciseProgress] = useState<ExerciseProgress[]>([]);
+  const realtimeRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const supabase = createClient();
 
-  const weekStart = startOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
-  const weekEnd = endOfWeek(addWeeks(new Date(), weekOffset), { weekStartsOn: 1 });
-  const weekLabel = `${format(weekStart, "d MMM", { locale: uk })} – ${format(weekEnd, "d MMM", { locale: uk })}`;
-
-  useEffect(() => { load(); }, [weekOffset]);
-  useEffect(() => { loadFinance(); }, [financePeriod]);
+  useEffect(() => { load(); }, [period]);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const start = format(weekStart, "yyyy-MM-dd");
-    const end = format(weekEnd, "yyyy-MM-dd");
-    const thirtyDaysAgo = format(subDays(new Date(), 30), "yyyy-MM-dd");
+    const fromDate = getPeriodFromDate(period);
 
     const [
       { data: sk }, { data: dw }, { data: wo }, { data: lg },
       { data: bm }, { data: tx }, { data: cat }, { data: reps },
     ] = await Promise.all([
       supabase.from("skills").select("*, habits(*)").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("deep_work_sessions").select("*").eq("user_id", user.id).gte("date", start).lte("date", end),
-      supabase.from("workout_sessions").select("*").eq("user_id", user.id).gte("date", start).lte("date", end),
-      supabase.from("daily_logs").select("*").eq("user_id", user.id).gte("date", start).lte("date", end),
-      supabase.from("body_measurements").select("*").eq("user_id", user.id).gte("date", thirtyDaysAgo).order("date"),
-      supabase.from("transactions").select("*, category:expense_categories(*)").eq("user_id", user.id).gte("date", start).lte("date", end),
+      supabase.from("deep_work_sessions").select("*").eq("user_id", user.id).gte("date", fromDate),
+      supabase.from("workout_sessions").select("*").eq("user_id", user.id).gte("date", fromDate).order("date"),
+      supabase.from("daily_logs").select("*").eq("user_id", user.id).gte("date", fromDate),
+      supabase.from("body_measurements").select("*").eq("user_id", user.id).gte("date", fromDate).order("date"),
+      supabase.from("transactions").select("*, account:finance_accounts(*), category:expense_categories(*), subcategory:expense_categories!subcategory_id(id,name)").eq("user_id", user.id).gte("date", fromDate).order("date", { ascending: false }),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
       supabase.from("ai_reports").select("*").eq("user_id", user.id).order("week_start", { ascending: false }).limit(12),
     ]);
@@ -113,42 +105,70 @@ export default function AnalyticsPage() {
     setCategories(cat ?? []);
     setAiReports(reps ?? []);
 
-    // Load 30-day workout history for body tab
-    const thirtyAgo = format(subDays(new Date(), 30), "yyyy-MM-dd");
-    const { data: wAll } = await supabase
-      .from("workout_sessions")
-      .select("*")
-      .eq("user_id", user.id)
-      .gte("date", thirtyAgo)
-      .order("date");
-    setAllWorkouts(wAll ?? []);
+    // Exercise progress for body tab
+    const { data: sets } = await supabase
+      .from("workout_sets")
+      .select("exercise_id, weight_kg, exercises(name), workout_sessions!inner(date, user_id)")
+      .eq("workout_sessions.user_id", user.id)
+      .gte("workout_sessions.date", fromDate)
+      .gt("weight_kg", 0);
+
+    if (sets && sets.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const grouped: Record<string, { name: string; byDate: Record<string, number[]> }> = {};
+      for (const s of sets as any[]) {
+        const id = s.exercise_id;
+        const date = s.workout_sessions?.date ?? "";
+        const w = s.weight_kg ?? 0;
+        if (!grouped[id]) grouped[id] = { name: s.exercises?.name ?? id, byDate: {} };
+        if (!grouped[id].byDate[date]) grouped[id].byDate[date] = [];
+        grouped[id].byDate[date].push(w);
+      }
+      const progress: ExerciseProgress[] = Object.entries(grouped).map(([id, g]) => {
+        const history = Object.entries(g.byDate)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([date, weights]) => ({ date, maxWeight: Math.max(...weights) }));
+        const allW = history.map((h) => h.maxWeight);
+        return {
+          exercise_id: id,
+          name: g.name,
+          history,
+          pr: Math.max(...allW),
+          delta: allW.length >= 2 ? allW[allW.length - 1] - allW[0] : 0,
+        };
+      }).filter((e) => e.history.length >= 2);
+      setExerciseProgress(progress);
+    } else {
+      setExerciseProgress([]);
+    }
+
+    // Realtime subscription for finance changes
+    if (realtimeRef.current) {
+      supabase.removeChannel(realtimeRef.current);
+    }
+    const ch = supabase
+      .channel("analytics-finance")
+      .on("postgres_changes", { event: "*", schema: "public", table: "transactions", filter: `user_id=eq.${user.id}` }, () => load())
+      .subscribe();
+    realtimeRef.current = ch;
   }
 
-  async function loadFinance() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const period = FINANCE_PERIODS.find((p) => p.value === financePeriod);
-    let query = supabase
-      .from("transactions")
-      .select("*, account:finance_accounts(*), category:expense_categories(*)")
-      .eq("user_id", user.id)
-      .order("date", { ascending: false });
-    if (period?.days) {
-      query = query.gte("date", format(subDays(new Date(), period.days), "yyyy-MM-dd"));
-    }
-    const { data } = await query;
-    setFinanceTransactions(data ?? []);
-  }
+  // Cleanup realtime on unmount
+  useEffect(() => () => { if (realtimeRef.current) supabase.removeChannel(realtimeRef.current); }, []);
 
   const totalDeepWork = deepWork.reduce((s, d) => s + d.duration_minutes, 0);
 
-  const dwChartData = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    const dateStr = format(d, "yyyy-MM-dd");
-    const mins = deepWork.filter((s) => s.date === dateStr).reduce((a, s) => a + s.duration_minutes, 0);
-    return { day: format(d, "EEE", { locale: uk }), hours: Math.round((mins / 60) * 10) / 10 };
-  });
+  const dwChartData = (() => {
+    // Show up to 30 bars — one per day in the period
+    const periodDays = period === "7d" ? 7 : period === "30d" ? 30 : period === "90d" ? 90 : period === "180d" ? 180 : 30;
+    const days = Math.min(periodDays, 30);
+    return Array.from({ length: days }, (_, i) => {
+      const d = subDays(new Date(), days - 1 - i);
+      const dateStr = format(d, "yyyy-MM-dd");
+      const mins = deepWork.filter((s) => s.date === dateStr).reduce((a, s) => a + s.duration_minutes, 0);
+      return { day: format(d, "d"), hours: Math.round((mins / 60) * 10) / 10 };
+    });
+  })();
 
   const nextMonday = (() => {
     const d = new Date();
@@ -166,36 +186,39 @@ export default function AnalyticsPage() {
     return `${h}год ${m}хв`;
   })();
 
-  const currentReport = aiReports.find((r) => r.week_start === format(weekStart, "yyyy-MM-dd"));
+  const currentReport = aiReports[0];
 
   // Finance tab
-  const allExpenses = financeTransactions.filter((t) => t.amount < 0);
-  const allIncome = financeTransactions.filter((t) => t.amount > 0);
+  const allExpenses = transactions.filter((t) => t.amount < 0);
+  const allIncome = transactions.filter((t) => t.amount > 0);
   const activeTxs = financeView === "expenses" ? allExpenses : allIncome;
-  const spendingByCategory: Record<string, number> = {};
-  activeTxs.forEach((t) => {
-    const catName = t.category?.name ?? "Інше";
-    spendingByCategory[catName] = (spendingByCategory[catName] ?? 0) + Math.abs(t.amount_eur ?? t.amount);
-  });
-  const pieData = Object.entries(spendingByCategory)
-    .sort(([, a], [, b]) => b - a)
-    .map(([name, value]) => ({ name, value: Math.round(value) }));
+  const catBreakdown = Object.values(
+    activeTxs.reduce((acc, t) => {
+      const key = t.category_id ?? "none";
+      if (!acc[key]) acc[key] = { id: key, name: t.category?.name ?? "Без категорії", icon: t.category?.icon ?? "💡", total: 0, items: [] };
+      acc[key].total += Math.abs(t.amount_eur ?? t.amount);
+      acc[key].items.push(t);
+      return acc;
+    }, {} as Record<string, { id: string; name: string; icon: string; total: number; items: Transaction[] }>)
+  ).sort((a, b) => b.total - a.total);
+
+  const pieData = catBreakdown.map((c) => ({ name: c.name, value: Math.round(c.total) }));
 
   const totalExpenses = allExpenses.reduce((s, t) => s + Math.abs(t.amount_eur ?? t.amount), 0);
   const totalIncome = allIncome.reduce((s, t) => s + (t.amount_eur ?? t.amount), 0);
   const activeTotal = financeView === "expenses" ? totalExpenses : totalIncome;
 
-  // Workout frequency for body tab (last 30d)
+  // Workout frequency bar chart
   const workoutChartData = Array.from({ length: 30 }, (_, i) => {
     const d = subDays(new Date(), 29 - i);
     const dateStr = format(d, "yyyy-MM-dd");
-    const count = allWorkouts.filter((w) => w.date === dateStr).length;
-    return { day: format(d, "d", { locale: uk }), count };
+    const count = workouts.filter((w) => w.date === dateStr).length;
+    return { day: format(d, "d"), count };
   });
-  const totalWorkouts30d = allWorkouts.length;
+  const totalWorkouts30d = workouts.length;
 
-  // alias for drilldown (still using week's expenses)
-  const expenses = transactions.filter((t) => t.amount < 0);
+  // alias for drilldown
+  const expenses = allExpenses;
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] pt-safe pb-4">
@@ -221,22 +244,10 @@ export default function AnalyticsPage() {
         ))}
       </div>
 
-      {/* Week selector (Overview + Focus only) */}
-      {(tab === "overview" || tab === "focus") && (
+      {/* Period selector — all tabs except AI */}
+      {tab !== "ai" && (
         <div className="px-4 mb-4">
-          <div className="flex items-center justify-between bg-[#111111] rounded-2xl p-3">
-            <button onClick={() => setWeekOffset((w) => w - 1)} className="text-[#6b7280] p-2">
-              <ChevronLeft size={20} />
-            </button>
-            <p className="text-white font-semibold text-sm">{weekLabel}</p>
-            <button
-              onClick={() => setWeekOffset((w) => Math.min(w + 1, 0))}
-              disabled={weekOffset === 0}
-              className="text-[#6b7280] p-2 disabled:opacity-30"
-            >
-              <ChevronRight size={20} />
-            </button>
-          </div>
+          <PeriodSelector value={period} onChange={setPeriod} />
         </div>
       )}
 
@@ -332,10 +343,42 @@ export default function AnalyticsPage() {
             )}
           </div>
 
+          {/* Exercise progress */}
+          {exerciseProgress.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-[#6b7280] text-xs uppercase tracking-wider">Прогрес у вправах</p>
+              {exerciseProgress.map((ex) => (
+                <div key={ex.exercise_id} className="bg-[#111111] rounded-2xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-white font-semibold text-sm">{ex.name}</p>
+                    <span className="text-xs bg-[#00FF85]/10 text-[#00FF85] px-2 py-0.5 rounded-full">
+                      🏆 МР: {ex.pr}кг
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={90}>
+                    <LineChart data={ex.history}>
+                      <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 9 }} axisLine={false} tickLine={false}
+                        tickFormatter={(d) => d.slice(5).replace("-", ".")} />
+                      <YAxis domain={["auto", "auto"]} tick={{ fill: "#6b7280", fontSize: 9 }} axisLine={false} tickLine={false} unit="к" width={30} />
+                      <Tooltip contentStyle={{ background: "#111", border: "none", borderRadius: 8, fontSize: 12, color: "white" }}
+                        formatter={(v) => [`${v} кг`]} />
+                      <Line type="monotone" dataKey="maxWeight" stroke="#00FF85" strokeWidth={2} dot={{ fill: "#00FF85", r: 2 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                  {ex.delta !== 0 && (
+                    <p className={`text-xs mt-1 ${ex.delta > 0 ? "text-[#00FF85]" : "text-[#ef4444]"}`}>
+                      {ex.delta > 0 ? "↑" : "↓"} {Math.abs(ex.delta).toFixed(1)}кг за період
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {bodyMeasurements.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-4xl mb-3">📏</p>
-              <p className="text-[#6b7280] text-sm">Немає вимірів за останні 30 днів</p>
+              <p className="text-[#6b7280] text-sm">Немає вимірів за вибраний період</p>
               <p className="text-[#6b7280] text-xs mt-1">Додай виміри у розділі Тіло</p>
             </div>
           ) : (
@@ -408,7 +451,7 @@ export default function AnalyticsPage() {
         <div className="px-4 space-y-4">
           <div className="bg-[#111111] rounded-2xl p-4">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-white font-semibold text-sm">⚡ Deep Work за тиждень</p>
+              <p className="text-white font-semibold text-sm">⚡ Deep Work</p>
               <p className="text-[#00FF85] font-black">{Math.floor(totalDeepWork / 60)}год {totalDeepWork % 60}хв</p>
             </div>
             <ResponsiveContainer width="100%" height={140}>
@@ -453,23 +496,13 @@ export default function AnalyticsPage() {
                           }}
                         />
                       </div>
-                      <div className="flex gap-1 mt-2">
+                      <div className="flex gap-1 mt-2 overflow-x-auto">
                         {skillHabits.map((h: { id: string; name: string }) => {
                           const daysCompleted = logs.filter((l) => l.habit_id === h.id && l.completed).length;
                           return (
-                            <div key={h.id} className="flex-1 min-w-0 text-center">
-                              <div className="flex gap-0.5 justify-center">
-                                {Array.from({ length: 7 }).map((_, di) => {
-                                  const d = new Date(weekStart);
-                                  d.setDate(d.getDate() + di);
-                                  const dateStr = format(d, "yyyy-MM-dd");
-                                  const done = logs.some((l) => l.habit_id === h.id && l.date === dateStr && l.completed);
-                                  return (
-                                    <div key={di} className={cn("w-2 h-2 rounded-full", done ? "bg-[#00FF85]" : "bg-[#1a1a1a]")} />
-                                  );
-                                })}
-                              </div>
-                              <p className="text-[#6b7280] text-[9px] mt-0.5 truncate">{h.name}</p>
+                            <div key={h.id} className="shrink-0 text-center min-w-[40px]">
+                              <p className="text-[#00FF85] text-xs font-bold">{daysCompleted}д</p>
+                              <p className="text-[#6b7280] text-[9px] truncate">{h.name}</p>
                             </div>
                           );
                         })}
@@ -486,22 +519,6 @@ export default function AnalyticsPage() {
       {/* ── ФІНАНСИ ── */}
       {tab === "finance" && (
         <div className="px-4 space-y-4">
-          {/* Period selector */}
-          <div className="flex gap-1.5">
-            {FINANCE_PERIODS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setFinancePeriod(p.value)}
-                className={cn(
-                  "flex-1 py-2 rounded-xl text-xs font-semibold transition-all",
-                  financePeriod === p.value ? "bg-[#00FF85] text-black" : "bg-[#111111] text-[#6b7280]"
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
           {/* Income / Expense toggle */}
           <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#1a1a1a] rounded-2xl">
             <button
@@ -520,7 +537,7 @@ export default function AnalyticsPage() {
             </button>
           </div>
 
-          {pieData.length === 0 ? (
+          {catBreakdown.length === 0 ? (
             <div className="text-center py-12">
               <p className="text-4xl mb-3">💸</p>
               <p className="text-[#6b7280] text-sm">Немає даних за цей період</p>
@@ -533,15 +550,7 @@ export default function AnalyticsPage() {
                 </p>
                 <ResponsiveContainer width="100%" height={180}>
                   <PieChart>
-                    <Pie
-                      data={pieData}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={3}
-                      dataKey="value"
-                    >
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
                       {pieData.map((_, i) => (
                         <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                       ))}
@@ -555,23 +564,19 @@ export default function AnalyticsPage() {
               </div>
 
               <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
-                {pieData.map(({ name, value }, i) => {
-                  const pct = activeTotal > 0 ? Math.round((value / activeTotal) * 100) : 0;
-                  const cat = categories.find((c) => c.name === name);
+                {catBreakdown.map((cat, i) => {
+                  const pct = activeTotal > 0 ? Math.round((cat.total / activeTotal) * 100) : 0;
                   return (
                     <button
-                      key={name}
-                      onClick={() => financeView === "expenses" && setDrilldownCat({ id: cat?.id ?? name, name, icon: cat?.icon ?? "💡" })}
+                      key={cat.id}
+                      onClick={() => setDrilldownCat({ id: cat.id, name: cat.name, icon: cat.icon })}
                       className="w-full flex items-center gap-3 px-4 py-3 active:bg-white/5 transition-colors"
                     >
-                      <div
-                        className="w-3 h-3 rounded-full shrink-0"
-                        style={{ background: PIE_COLORS[i % PIE_COLORS.length] }}
-                      />
-                      <span className="text-lg shrink-0">{cat?.icon ?? "💡"}</span>
-                      <p className="text-white text-sm flex-1 text-left">{name}</p>
+                      <div className="w-3 h-3 rounded-full shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                      <span className="text-lg shrink-0">{cat.icon}</span>
+                      <p className="text-white text-sm flex-1 text-left">{cat.name}</p>
                       <p className="text-[#6b7280] text-xs">{pct}%</p>
-                      <p className={cn("font-semibold text-sm shrink-0", financeView === "expenses" ? "text-[#ef4444]" : "text-[#00FF85]")}>€{value}</p>
+                      <p className={cn("font-semibold text-sm shrink-0", financeView === "expenses" ? "text-[#ef4444]" : "text-[#00FF85]")}>€{Math.round(cat.total)}</p>
                     </button>
                   );
                 })}
@@ -654,46 +659,47 @@ export default function AnalyticsPage() {
       )}
 
       {/* ── Category Drill-Down ── */}
-      <BottomSheet
-        open={!!drilldownCat}
-        onClose={() => setDrilldownCat(null)}
-        title={drilldownCat?.name ?? ""}
-      >
+      <BottomSheet open={!!drilldownCat} onClose={() => setDrilldownCat(null)} title={drilldownCat?.name ?? ""}>
         {drilldownCat && (() => {
-          const drillTxs = expenses.filter((tx) => tx.category?.id === drilldownCat.id || tx.category?.name === drilldownCat.name);
-          const drillTotal = drillTxs.reduce((s, t) => s + Math.abs(t.amount_eur ?? t.amount), 0);
+          const entry = catBreakdown.find((c) => c.id === drilldownCat.id) ?? { items: [], total: 0 };
+          const drillTxs = entry.items;
+          const drillTotal = entry.total;
+          const color = financeView === "expenses" ? "#ef4444" : "#00FF85";
           return (
             <div className="space-y-3 pb-6">
               <div className="text-center py-2">
                 <span className="text-5xl">{drilldownCat.icon}</span>
-                <p className="text-[#ef4444] font-black text-3xl mt-3">€{Math.round(drillTotal)}</p>
+                <p className="font-black text-3xl mt-3" style={{ color }}>€{Math.round(drillTotal)}</p>
                 <p className="text-[#6b7280] text-xs mt-1">{drillTxs.length} транзакцій</p>
               </div>
-              {drillTxs.length > 0 && (
-                <div className="space-y-2">
-                  {drillTxs.map((tx) => {
-                    const pct = drillTotal > 0 ? Math.round((Math.abs(tx.amount_eur ?? tx.amount) / drillTotal) * 100) : 0;
-                    return (
-                      <div key={tx.id} className="bg-[#1a1a1a] rounded-xl px-4 py-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <p className="text-white text-sm">{tx.description || tx.category?.name || "Витрата"}</p>
-                          <p className="text-[#ef4444] font-semibold text-sm">€{Math.abs(tx.amount_eur ?? tx.amount).toFixed(0)}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
-                            <div className="h-full bg-[#ef4444] rounded-full" style={{ width: `${pct}%` }} />
-                          </div>
-                          <p className="text-[#6b7280] text-xs w-8 text-right">{pct}%</p>
-                        </div>
-                        <p className="text-[#6b7280] text-xs mt-1">{tx.date} · {tx.account?.name}</p>
+              <div className="space-y-2">
+                {drillTxs.map((tx) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const sub = (tx as any).subcategory as { name: string } | null;
+                  const label = sub ? `${drilldownCat.name} / ${sub.name}` : drilldownCat.name;
+                  const pct = drillTotal > 0 ? Math.round((Math.abs(tx.amount_eur ?? tx.amount) / drillTotal) * 100) : 0;
+                  return (
+                    <div key={tx.id} className="bg-[#1a1a1a] rounded-xl px-4 py-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <p className="text-white text-sm">{label}</p>
+                        <p className="font-semibold text-sm" style={{ color }}>€{Math.abs(tx.amount_eur ?? tx.amount).toFixed(0)}</p>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              {drillTxs.length === 0 && (
-                <p className="text-[#6b7280] text-sm text-center py-4">Немає транзакцій</p>
-              )}
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                        </div>
+                        <p className="text-[#6b7280] text-xs w-8 text-right">{pct}%</p>
+                      </div>
+                      <p className="text-[#6b7280] text-xs mt-1">
+                        {new Date(tx.date).toLocaleDateString("uk-UA", { day: "numeric", month: "short" })} · {tx.account?.name}
+                      </p>
+                    </div>
+                  );
+                })}
+                {drillTxs.length === 0 && (
+                  <p className="text-[#6b7280] text-sm text-center py-4">Немає транзакцій</p>
+                )}
+              </div>
             </div>
           );
         })()}

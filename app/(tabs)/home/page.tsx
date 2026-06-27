@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { FileText, Settings, Zap, Snowflake, Trophy } from "lucide-react";
+import { FileText, Settings, Zap, Snowflake, Trophy, ChevronDown, ChevronUp, Plus } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import { uk } from "date-fns/locale";
 import { createClient } from "@/lib/supabase/client";
 import type { Skill, Habit, DailyLog, Profile } from "@/lib/types";
-import { SkillCard } from "@/components/home/SkillCard";
 import { QuickHabits } from "@/components/home/QuickHabits";
 import { T6XLogoText } from "@/components/T6XLogo";
 import { useDeepWorkTimer } from "@/lib/hooks/useDeepWorkTimer";
@@ -17,23 +16,21 @@ import { DeepWorkTimerSheet } from "@/components/home/DeepWorkTimerSheet";
 import { showToast } from "@/components/ui/Toaster";
 import { getQuoteOfDay } from "@/lib/quotes";
 import { getLevelInfo, XP_REWARDS } from "@/lib/xp";
-import { awardXP, checkAllHabitsDoneToday } from "@/lib/achievements";
-
-type SkillStatus = "pending" | "done" | "failed";
+import { awardXP, checkAllHabitsDoneToday, checkHabitAchievements, checkLevelAchievements, unlockAchievement } from "@/lib/achievements";
 
 export default function HomePage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [allHabits, setAllHabits] = useState<Habit[]>([]);
   const [logs, setLogs] = useState<DailyLog[]>([]);
-  const [skillStatuses, setSkillStatuses] = useState<Record<string, SkillStatus>>({});
+  const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
   const [timerOpen, setTimerOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [levelUp, setLevelUp] = useState<{ level: number; name: string } | null>(null);
 
   const supabase = createClient();
   const { todayMinutes, formatMinutes } = useDeepWorkTimer();
-  const { streak, freeze } = useStreak();
+  const { streak, freeze, recalculate } = useStreak();
 
   const today = format(new Date(), "yyyy-MM-dd");
   const todayStr = format(new Date(), "EEEE, d MMMM", { locale: uk });
@@ -58,45 +55,13 @@ export default function HomePage() {
     setSkills(sk ?? []);
     setAllHabits(hab ?? []);
     setLogs(lg ?? []);
-
-    // Compute skill statuses from logs
-    const statuses: Record<string, SkillStatus> = {};
-    for (const skill of sk ?? []) {
-      const skillHabits = (hab ?? []).filter((h) => h.skill_id === skill.id);
-      const completed = (lg ?? []).filter((l) =>
-        skillHabits.some((h) => h.id === l.habit_id) && l.completed
-      ).length;
-      if (completed > 0) statuses[skill.id] = "done";
-      else statuses[skill.id] = "pending";
-    }
-    setSkillStatuses(statuses);
+    // Open all skills by default on first load
+    setExpandedSkills((prev) => {
+      const next = { ...prev };
+      for (const s of sk ?? []) if (!(s.id in next)) next[s.id] = true;
+      return next;
+    });
     setLoading(false);
-  }
-
-  async function toggleSkillStatus(skill: Skill) {
-    if (navigator.vibrate) navigator.vibrate(10);
-    const current = skillStatuses[skill.id] ?? "pending";
-    const next: SkillStatus =
-      current === "pending" ? "done" : current === "done" ? "failed" : "pending";
-
-    setSkillStatuses((s) => ({ ...s, [skill.id]: next }));
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const skillHabits = allHabits.filter((h) => h.skill_id === skill.id);
-    for (const habit of skillHabits) {
-      await supabase.from("daily_logs").upsert(
-        {
-          user_id: user.id,
-          habit_id: habit.id,
-          date: today,
-          completed: next === "done",
-        },
-        { onConflict: "user_id,habit_id,date" }
-      );
-    }
-    await loadData();
   }
 
   async function toggleHabit(habit: Habit) {
@@ -119,9 +84,20 @@ export default function HomePage() {
     if (completed) {
       showToast(`${habit.name} ✓`);
       const newLevel = await awardXP(user.id, XP_REWARDS.HABIT_COMPLETED, "Звичка виконана");
-      if (newLevel > 0) setLevelUp({ level: newLevel, name: "" });
+      if (newLevel > 0) {
+        setLevelUp({ level: newLevel, name: "" });
+        await checkLevelAchievements(user.id, newLevel);
+      }
+      const newStreak = await recalculate();
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[Achievements] streak:", newStreak, "userId:", user.id);
+      }
+      await checkHabitAchievements(user.id, newStreak);
       const allDone = await checkAllHabitsDoneToday(user.id);
-      if (allDone) await awardXP(user.id, XP_REWARDS.ALL_HABITS_DAY, "Всі звички за день");
+      if (allDone) {
+        await awardXP(user.id, XP_REWARDS.ALL_HABITS_DAY, "Всі звички за день");
+        await unlockAchievement(user.id, "perfect_day");
+      }
       await loadData();
     }
   }
@@ -130,10 +106,6 @@ export default function HomePage() {
     ? differenceInDays(new Date(), new Date(profile.goal_start_date)) + 1
     : 0;
 
-  const habitsWithLogs = allHabits.map((h) => ({
-    ...h,
-    log: logs.find((l) => l.habit_id === h.id),
-  }));
 
   if (loading) {
     return (
@@ -200,20 +172,67 @@ export default function HomePage() {
           <p className="text-white/60 text-sm italic leading-relaxed">&ldquo;{quote}&rdquo;</p>
         </div>
 
-        {/* Skills grid */}
+        {/* Skills accordion */}
         {skills.length > 0 ? (
-          <div>
-            <p className="text-[#6b7280] text-xs uppercase tracking-wider mb-2">Скіли</p>
-            <div className="grid grid-cols-2 gap-3">
-              {skills.map((skill) => (
-                <SkillCard
-                  key={skill.id}
-                  skill={skill}
-                  status={skillStatuses[skill.id] ?? "pending"}
-                  onToggle={() => toggleSkillStatus(skill)}
-                />
-              ))}
-            </div>
+          <div className="space-y-2">
+            <p className="text-[#6b7280] text-xs uppercase tracking-wider">Скіли</p>
+            {skills.map((skill) => {
+              const skillHabits = allHabits.filter((h) => h.skill_id === skill.id);
+              const doneCount = skillHabits.filter((h) =>
+                logs.some((l) => l.habit_id === h.id && l.completed)
+              ).length;
+              const isOpen = expandedSkills[skill.id] ?? true;
+              return (
+                <div key={skill.id} className="bg-[#111111] rounded-2xl overflow-hidden">
+                  <button
+                    onClick={() => setExpandedSkills((p) => ({ ...p, [skill.id]: !isOpen }))}
+                    className="w-full flex items-center justify-between px-4 py-3.5"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">{skill.icon}</span>
+                      <p className="text-white font-semibold text-sm">{skill.name}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#6b7280] text-xs">
+                        {doneCount}/{skillHabits.length}
+                      </span>
+                      {doneCount === skillHabits.length && skillHabits.length > 0 && (
+                        <span className="text-[#00FF85] text-xs">✓</span>
+                      )}
+                      {isOpen ? <ChevronUp size={14} className="text-[#6b7280]" /> : <ChevronDown size={14} className="text-[#6b7280]" />}
+                    </div>
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-white/5 px-4 pb-3 pt-2 space-y-2">
+                      {skillHabits.length === 0 ? (
+                        <Link href="/settings" className="flex items-center gap-1.5 text-[#6b7280] text-xs py-2">
+                          <Plus size={12} />
+                          Додай звичку в Налаштуваннях →
+                        </Link>
+                      ) : (
+                        skillHabits.map((habit) => {
+                          const done = logs.some((l) => l.habit_id === habit.id && l.completed);
+                          return (
+                            <button
+                              key={habit.id}
+                              onClick={() => toggleHabit(habit)}
+                              className="w-full flex items-center gap-3 py-1.5 active:opacity-70"
+                            >
+                              <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all ${done ? "bg-[#00FF85] border-[#00FF85]" : "border-white/20"}`}>
+                                {done && <span className="text-black text-[10px] font-black">✓</span>}
+                              </div>
+                              <span className={`text-sm flex-1 text-left ${done ? "text-white/40 line-through" : "text-white"}`}>
+                                {habit.name}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <div className="bg-[#111111] rounded-2xl p-6 text-center">
@@ -241,9 +260,6 @@ export default function HomePage() {
           </div>
           <span className="text-[#6b7280] text-sm">→</span>
         </button>
-
-        {/* Quick Habits */}
-        <QuickHabits habits={habitsWithLogs} onToggle={toggleHabit} />
 
         {/* Streak Freeze */}
         {streak > 0 && !profile?.streak_freeze_used_this_month && (

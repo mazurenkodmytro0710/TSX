@@ -45,6 +45,7 @@ export default function FinancePage() {
   const [subcategories, setSubcategories] = useState<ExpenseCategory[]>([]);
   const [allSubcategories, setAllSubcategories] = useState<ExpenseCategory[]>([]);
   const [subcategorySearch, setSubcategorySearch] = useState("");
+  const [visibleCount, setVisibleCount] = useState(30);
   const [addOpen, setAddOpen] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [userId, setUserId] = useState<string>("");
@@ -263,7 +264,8 @@ export default function FinancePage() {
     .filter((a) => a.include_in_total)
     .reduce((sum, a) => sum + toEur(a.current_balance, a.currency), 0);
 
-  const grouped = transactions.reduce<Record<string, Transaction[]>>((acc, tx) => {
+  const visibleTxs = transactions.slice(0, visibleCount);
+  const grouped = visibleTxs.reduce<Record<string, Transaction[]>>((acc, tx) => {
     const today = format(new Date(), "yyyy-MM-dd");
     const yesterday = format(new Date(Date.now() - 86400000), "yyyy-MM-dd");
     const key = tx.date === today ? "Сьогодні" : tx.date === yesterday ? "Вчора" : tx.date;
@@ -337,8 +339,10 @@ export default function FinancePage() {
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
               {txs.map((tx) => {
                 const subcat = tx.subcategory_id ? allSubcategories.find(s => s.id === tx.subcategory_id) : null;
-                const primaryLabel = subcat?.name ?? tx.description ?? tx.category?.name ?? (tx.amount < 0 ? "Витрата" : "Дохід");
-                const subtitleLabel = subcat ? tx.category?.name : tx.account?.name;
+                const primaryLabel = subcat
+                  ? `${tx.category?.name ?? "?"} / ${subcat.name}`
+                  : tx.category?.name ?? tx.description ?? (tx.amount < 0 ? "Витрата" : "Дохід");
+                const subtitleLabel = new Date(tx.date).toLocaleDateString("uk-UA", { day: "numeric", month: "short" });
                 return (
                 <div key={tx.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="w-9 h-9 rounded-xl bg-[#1a1a1a] flex items-center justify-center shrink-0">
@@ -371,6 +375,14 @@ export default function FinancePage() {
             </div>
           </div>
         ))}
+        {transactions.length > visibleCount && (
+          <button
+            onClick={() => setVisibleCount((c) => c + 30)}
+            className="w-full py-3 text-[#6b7280] text-sm text-center"
+          >
+            Завантажити ще ({transactions.length - visibleCount} залишилось)
+          </button>
+        )}
       </div>
 
       {/* FAB */}
