@@ -48,6 +48,7 @@ export default function SettingsPage() {
   const supabase = createClient();
 
   const [activeTab, setActiveTab] = useState<TabId>("profile");
+  const [userId, setUserId] = useState<string>("");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -120,6 +121,7 @@ export default function SettingsPage() {
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
+    setUserId(user.id);
 
     const [
       { data: prof },
@@ -151,6 +153,9 @@ export default function SettingsPage() {
     }
 
     const catList = cats ?? [];
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[Settings] categories:", catList.length, catList.map((c) => `${c.name}(${c.transaction_type ?? "?"})`).join(", "));
+    }
     setCategories(catList);
 
     // Seed default income categories once if none exist
@@ -321,7 +326,8 @@ export default function SettingsPage() {
   }
 
   async function toggleSkillActive(skillId: string, active: boolean) {
-    await supabase.from("skills").update({ is_active: active }).eq("id", skillId);
+    const { error } = await supabase.from("skills").update({ is_active: active }).eq("id", skillId).eq("user_id", userId);
+    if (process.env.NODE_ENV !== "production" && error) console.error("[Settings] toggleSkill error:", error);
     setSkills((prev) => prev.map((s) => s.id === skillId ? { ...s, is_active: active } : s));
   }
 

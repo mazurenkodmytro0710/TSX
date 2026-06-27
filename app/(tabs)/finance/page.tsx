@@ -42,6 +42,7 @@ export default function FinancePage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+  const [allCategories, setAllCategories] = useState<ExpenseCategory[]>([]);
   const [subcategories, setSubcategories] = useState<ExpenseCategory[]>([]);
   const [subcategorySearch, setSubcategorySearch] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
@@ -93,13 +94,15 @@ export default function FinancePage() {
     if (!user) return;
     setUserId(user.id);
 
-    const [{ data: acc }, { data: tx, error: txError }, { data: cat }] = await Promise.all([
+    const [{ data: acc }, { data: tx, error: txError }, { data: cat }, { data: allCat }] = await Promise.all([
       supabase.from("finance_accounts").select("*").eq("user_id", user.id).order("sort_order"),
+      // Simple select without FK joins to expense_categories — avoids ambiguity (2 FKs to same table)
       supabase.from("transactions")
-        .select("*, account:finance_accounts(*), category:expense_categories!category_id(*), subcategory:expense_categories!subcategory_id(id,name,icon)")
+        .select("*, account:finance_accounts(*)")
         .eq("user_id", user.id)
         .order("date", { ascending: false }),
       supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
+      supabase.from("expense_categories").select("*").eq("user_id", user.id),
     ]);
 
     if (process.env.NODE_ENV !== "production") {
@@ -109,6 +112,7 @@ export default function FinancePage() {
     setAccounts(acc ?? []);
     setTransactions(tx ?? []);
     setCategories(cat ?? []);
+    setAllCategories(allCat ?? []);
 
     if (acc?.[0]) {
       setTxForm((f) => ({ ...f, accountId: f.accountId || acc[0].id }));
@@ -348,15 +352,17 @@ export default function FinancePage() {
             </div>
             <div className="bg-[#111111] rounded-2xl overflow-hidden divide-y divide-white/5">
               {txs.map((tx) => {
-                const primaryLabel = tx.subcategory
-                  ? `${tx.category?.name ?? "?"} / ${tx.subcategory.name}`
-                  : tx.category?.name ?? tx.description ?? (tx.amount < 0 ? "Витрата" : "Дохід");
+                const txCat = allCategories.find((c) => c.id === tx.category_id);
+                const txSubcat = tx.subcategory_id ? allCategories.find((c) => c.id === tx.subcategory_id) : null;
+                const primaryLabel = txSubcat
+                  ? `${txCat?.name ?? "?"} / ${txSubcat.name}`
+                  : txCat?.name ?? tx.description ?? (tx.amount < 0 ? "Витрата" : "Дохід");
                 const subtitleLabel = new Date(tx.date).toLocaleDateString("uk-UA", { day: "numeric", month: "short" });
                 return (
                 <div key={tx.id} className="flex items-center gap-3 px-4 py-3">
                   <div className="w-9 h-9 rounded-xl bg-[#1a1a1a] flex items-center justify-center shrink-0">
                     <span className="text-lg">
-                      {tx.category?.icon ?? (tx.amount < 0 ? "💸" : "💰")}
+                      {txCat?.icon ?? (tx.amount < 0 ? "💸" : "💰")}
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">

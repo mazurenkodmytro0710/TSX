@@ -91,8 +91,8 @@ export default function AnalyticsPage() {
       supabase.from("workout_sessions").select("*").eq("user_id", user.id).gte("date", fromDate).order("date"),
       supabase.from("daily_logs").select("*").eq("user_id", user.id).gte("date", fromDate),
       supabase.from("body_measurements").select("*").eq("user_id", user.id).gte("date", fromDate).order("date"),
-      supabase.from("transactions").select("*, account:finance_accounts(*), category:expense_categories(*), subcategory:expense_categories!subcategory_id(id,name)").eq("user_id", user.id).gte("date", fromDate).order("date", { ascending: false }),
-      supabase.from("expense_categories").select("*").eq("user_id", user.id).is("parent_id", null),
+      supabase.from("transactions").select("*, account:finance_accounts(*)").eq("user_id", user.id).gte("date", fromDate).order("date", { ascending: false }),
+      supabase.from("expense_categories").select("*").eq("user_id", user.id),
       supabase.from("ai_reports").select("*").eq("user_id", user.id).order("week_start", { ascending: false }).limit(12),
     ]);
 
@@ -195,7 +195,10 @@ export default function AnalyticsPage() {
   const catBreakdown = Object.values(
     activeTxs.reduce((acc, t) => {
       const key = t.category_id ?? "none";
-      if (!acc[key]) acc[key] = { id: key, name: t.category?.name ?? "Без категорії", icon: t.category?.icon ?? "💡", total: 0, items: [] };
+      if (!acc[key]) {
+        const cat = categories.find((c) => c.id === t.category_id);
+        acc[key] = { id: key, name: cat?.name ?? "Без категорії", icon: cat?.icon ?? "💡", total: 0, items: [] };
+      }
       acc[key].total += Math.abs(t.amount_eur ?? t.amount);
       acc[key].items.push(t);
       return acc;
@@ -674,8 +677,7 @@ export default function AnalyticsPage() {
               </div>
               <div className="space-y-2">
                 {drillTxs.map((tx) => {
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const sub = (tx as any).subcategory as { name: string } | null;
+                  const sub = tx.subcategory_id ? categories.find((c) => c.id === tx.subcategory_id) : null;
                   const label = sub ? `${drilldownCat.name} / ${sub.name}` : drilldownCat.name;
                   const pct = drillTotal > 0 ? Math.round((Math.abs(tx.amount_eur ?? tx.amount) / drillTotal) * 100) : 0;
                   return (
