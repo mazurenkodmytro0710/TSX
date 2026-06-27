@@ -293,8 +293,8 @@ export default function FinancePage() {
     (txType === "transfer" && (!txForm.toAccountId || txForm.toAccountId === txForm.accountId));
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] pt-safe pb-4">
-      <header className="px-4 pt-4 pb-3 flex items-center justify-between">
+    <div className="h-screen flex flex-col bg-[#0a0a0a] pt-safe overflow-hidden">
+      <header className="shrink-0 px-4 pt-4 pb-3 flex items-center justify-between">
         <h1 className="text-2xl font-black text-white">💰 Фінанси</h1>
         <button
           onClick={() => setAddAccountOpen(true)}
@@ -305,7 +305,7 @@ export default function FinancePage() {
       </header>
 
       {/* Account cards */}
-      <div className="flex gap-3 px-4 overflow-x-auto pb-2 scrollbar-hide">
+      <div className="shrink-0 flex gap-3 px-4 overflow-x-auto pb-2 scrollbar-hide">
         <div className="bg-[#111111] rounded-2xl p-4 min-w-[160px] h-[100px] shrink-0 flex flex-col justify-between border border-[#00FF85]/20">
           <p className="text-[#6b7280] text-xs">Загалом</p>
           <p className="text-[#00FF85] font-black text-2xl">{formatMoney(totalEur, "EUR")}</p>
@@ -333,7 +333,7 @@ export default function FinancePage() {
       </div>
 
       {/* Transactions */}
-      <div className="px-4 mt-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 mt-4 space-y-4 pb-28">
         {Object.keys(grouped).length === 0 && (
           <div className="text-center py-12">
             <p className="text-5xl mb-3">💸</p>
