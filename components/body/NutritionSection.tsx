@@ -5,33 +5,21 @@ import { format } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import type { NutritionLog } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { showToast } from "@/components/ui/Toaster";
 import { awardXP } from "@/lib/achievements";
 import { XP_REWARDS } from "@/lib/xp";
 
 const STATUS_OPTIONS = [
-  {
-    value: "done" as const,
-    label: "✅ Виконав норму",
-    active: "bg-green-500 text-white",
-    idle: "bg-green-500/10 text-green-400 border border-green-500/30",
-  },
-  {
-    value: "underate" as const,
-    label: "⚠️ Недобір",
-    active: "bg-yellow-500 text-white",
-    idle: "bg-yellow-500/10 text-yellow-400 border border-yellow-500/30",
-  },
-  {
-    value: "cheat" as const,
-    label: "❌ Зірвався",
-    active: "bg-red-500 text-white",
-    idle: "bg-red-500/10 text-red-400 border border-red-500/30",
-  },
+  { value: "done" as const,     icon: "✅", label: "Норм",      color: "#00FF85" },
+  { value: "underate" as const, icon: "⚠️", label: "Недобір",   color: "#f59e0b" },
+  { value: "cheat" as const,    icon: "❌", label: "Зірвався",  color: "#ef4444" },
 ];
 
 export function NutritionSection() {
   const [log, setLog] = useState<NutritionLog | null>(null);
   const [note, setNote] = useState("");
+  const [status, setStatus] = useState<"done" | "underate" | "cheat" | null>(null);
   const supabase = createClient();
   const today = format(new Date(), "yyyy-MM-dd");
 
@@ -49,17 +37,19 @@ export function NutritionSection() {
     if (lg) {
       setLog(lg);
       setNote(lg.note ?? "");
+      setStatus(lg.status as typeof status);
     }
   }
 
-  async function saveNutrition(status: "done" | "underate" | "cheat") {
+  async function save() {
+    if (!status) return;
     if (navigator.vibrate) navigator.vibrate(10);
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     const { data } = await supabase
       .from("nutrition_logs")
       .upsert(
-        { user_id: user.id, date: today, status, note: note || null },
+        { user_id: user.id, date: today, status, note: note.trim() || null },
         { onConflict: "user_id,date" }
       )
       .select()
@@ -68,50 +58,51 @@ export function NutritionSection() {
     if (status === "done") {
       await awardXP(user.id, XP_REWARDS.NUTRITION_DONE, "Харчування виконано");
     }
+    showToast("Харчування збережено ✓");
   }
-
-  async function saveNote() {
-    if (!log) return;
-    await saveNutrition(log.status as "done" | "underate" | "cheat");
-  }
-
-  const status = log?.status;
 
   return (
-    <div className="flex flex-col items-center px-4 pb-6">
-      <p className="text-gray-400 text-sm mt-6 mb-8 text-center">
-        Як пройшло харчування сьогодні?
-      </p>
+    <div className="bg-[#111111] rounded-2xl p-5">
+      <p className="text-white font-bold text-base mb-4">🥗 Харчування сьогодні</p>
 
-      <div className="flex flex-col gap-3 w-full">
-        {STATUS_OPTIONS.map(({ value, label, active, idle }) => (
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        {STATUS_OPTIONS.map((opt) => (
           <button
-            key={value}
-            onClick={() => saveNutrition(value)}
+            key={opt.value}
+            onClick={() => setStatus(opt.value)}
             className={cn(
-              "w-full h-[64px] rounded-2xl text-base font-semibold flex items-center justify-center gap-3 transition-all active:scale-95",
-              status === value ? active : idle
+              "flex flex-col items-center gap-2 py-4 rounded-2xl border-2 transition-all active:scale-95",
+              status === opt.value ? "border-current bg-current/10" : "border-white/10 bg-[#1a1a1a]"
             )}
+            style={status === opt.value ? { borderColor: opt.color, color: opt.color } : {}}
           >
-            {label}
+            <span className="text-2xl">{opt.icon}</span>
+            <span className="text-xs font-medium">{opt.label}</span>
           </button>
         ))}
       </div>
 
-      {status && (
-        <div className="w-full mt-4">
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onBlur={saveNote}
-            placeholder="Нотатка (необов'язково)..."
-            className="w-full bg-[#1a1a1a] rounded-2xl p-4 text-sm text-white placeholder:text-gray-600 outline-none resize-none h-[80px]"
-          />
-        </div>
-      )}
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        onBlur={() => { if (log && status) save(); }}
+        placeholder="Що їв сьогодні? (необов'язково)"
+        className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl p-3 text-white text-sm outline-none resize-none h-[80px] placeholder:text-[#6b7280]"
+        style={{ fontSize: "16px" }}
+      />
 
-      {status && (
-        <p className="text-xs text-gray-600 mt-3">Збережено сьогодні</p>
+      <Button
+        onClick={save}
+        disabled={!status}
+        className="w-full mt-3 h-11 bg-[#00FF85] text-black font-semibold rounded-xl disabled:opacity-40"
+      >
+        Зберегти
+      </Button>
+
+      {log?.status && (
+        <p className="text-xs text-[#6b7280] mt-2 text-center">
+          Збережено: {STATUS_OPTIONS.find((o) => o.value === log.status)?.label}
+        </p>
       )}
     </div>
   );
