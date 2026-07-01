@@ -219,6 +219,18 @@ export interface Transaction {
   group?: ExpenseGroup;
 }
 
+export interface Task {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  status: "backlog" | "in_progress" | "done" | "blocked";
+  priority: number;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Note {
   id: string;
   user_id: string;

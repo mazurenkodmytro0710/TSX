@@ -1,347 +1,233 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { format } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
-import type { Skill, Habit, DailyLog } from "@/lib/types";
-import { useDeepWorkTimer } from "@/lib/hooks/useDeepWorkTimer";
-import { awardXP, checkAllHabitsDoneToday } from "@/lib/achievements";
-import { XP_REWARDS } from "@/lib/xp";
-import { PlusCircle, ChevronDown, ChevronUp } from "lucide-react";
-import { cn } from "@/lib/utils";
+import type { Task } from "@/lib/types";
+import { Plus, Trash2 } from "lucide-react";
 import { BottomSheet } from "@/components/layout/BottomSheet";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { showToast } from "@/components/ui/Toaster";
+import { cn } from "@/lib/utils";
+
+const COLUMNS = [
+  { id: "backlog" as const, label: "Беклог", icon: "📋", color: "#6b7280" },
+  { id: "in_progress" as const, label: "В роботі", icon: "⚡", color: "#f59e0b" },
+  { id: "done" as const, label: "Зроблено", icon: "✅", color: "#00FF85" },
+  { id: "blocked" as const, label: "Заблоковано", icon: "🚫", color: "#ef4444" },
+];
+
+type ColId = typeof COLUMNS[number]["id"];
+
+function TaskCard({
+  task,
+  onMove,
+  onDelete,
+}: {
+  task: Task;
+  onMove: (id: string, status: ColId) => void;
+  onDelete: (id: string) => void;
+}) {
+  const otherCols = COLUMNS.filter((c) => c.id !== task.status);
+  return (
+    <div className="bg-[#111111] rounded-2xl p-4">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={() => onMove(task.id, task.status === "done" ? "backlog" : "done")}
+          className={cn(
+            "w-5 h-5 rounded-full border-2 shrink-0 mt-0.5 transition-all",
+            task.status === "done" ? "bg-[#00FF85] border-[#00FF85]" : "border-white/30"
+          )}
+        />
+        <div className="flex-1 min-w-0">
+          <p className={cn("text-sm font-medium", task.status === "done" ? "text-[#6b7280] line-through" : "text-white")}>
+            {task.title}
+          </p>
+          {task.description && (
+            <p className="text-[#6b7280] text-xs mt-1 line-clamp-2">{task.description}</p>
+          )}
+          {task.due_date && (
+            <p className="text-[#f59e0b] text-xs mt-1">
+              📅 {new Date(task.due_date).toLocaleDateString("uk-UA", { day: "numeric", month: "short" })}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="flex gap-2 mt-3 pt-3 border-t border-white/5 flex-wrap">
+        {otherCols.map((col) => (
+          <button
+            key={col.id}
+            onClick={() => onMove(task.id, col.id)}
+            className="text-[10px] text-[#6b7280] flex items-center gap-1 px-2 py-1 bg-[#1a1a1a] rounded-lg"
+          >
+            {col.icon} {col.label}
+          </button>
+        ))}
+        <button onClick={() => onDelete(task.id)} className="ml-auto text-[#6b7280] active:text-[#ef4444]">
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function FocusPage() {
-  const [skills, setSkills] = useState<Skill[]>([]);
-  const [habits, setHabits] = useState<Habit[]>([]);
-  const [logs, setLogs] = useState<DailyLog[]>([]);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [noteValues, setNoteValues] = useState<Record<string, string>>({});
-  const [numValues, setNumValues] = useState<Record<string, string>>({});
-  const [addSkillOpen, setAddSkillOpen] = useState(false);
-  const [newSkill, setNewSkill] = useState({ name: "", icon: "⭐", habits: [""] });
-  const [deepWorkHours, setDeepWorkHours] = useState("");
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [activeColumn, setActiveColumn] = useState<ColId>("backlog");
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState({ title: "", description: "", due_date: "", status: "backlog" as ColId });
   const supabase = createClient();
-  const today = format(new Date(), "yyyy-MM-dd");
-  const { todayMinutes, addManual, formatMinutes } = useDeepWorkTimer();
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-
-    const [{ data: sk }, { data: hab }, { data: lg }] = await Promise.all([
-      supabase.from("skills").select("*").eq("user_id", user.id).eq("is_active", true).order("sort_order"),
-      supabase.from("habits").select("*").eq("user_id", user.id).eq("is_active", true),
-      supabase.from("daily_logs").select("*").eq("user_id", user.id).eq("date", today),
-    ]);
-
-    setSkills(sk ?? []);
-    setHabits(hab ?? []);
-    setLogs(lg ?? []);
-
-    const initExpanded: Record<string, boolean> = {};
-    for (const s of sk ?? []) initExpanded[s.id] = true;
-    setExpanded(initExpanded);
+    const { data } = await supabase
+      .from("tasks")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("priority", { ascending: false });
+    setTasks(data ?? []);
   }
 
-  async function toggleHabit(habit: Habit, type: string) {
-    if (navigator.vibrate) navigator.vibrate(10);
+  async function saveTask() {
+    if (!form.title.trim()) return;
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-
-    const existing = logs.find((l) => l.habit_id === habit.id);
-    const completed = !(existing?.completed ?? false);
-
-    await supabase.from("daily_logs").upsert(
-      {
-        user_id: user.id,
-        habit_id: habit.id,
-        date: today,
-        completed,
-        note: noteValues[habit.id] || null,
-        value: numValues[habit.id] ? parseFloat(numValues[habit.id]) : null,
-      },
-      { onConflict: "user_id,habit_id,date" }
-    );
-
-    setLogs((prev) => {
-      const without = prev.filter((l) => l.habit_id !== habit.id);
-      return [...without, { id: "", user_id: user.id, habit_id: habit.id, date: today, completed, note: null, value: null, created_at: "" }];
-    });
-
-    if (completed) {
-      await awardXP(user.id, XP_REWARDS.HABIT_COMPLETED, "Звичка виконана");
-      const allDone = await checkAllHabitsDoneToday(user.id);
-      if (allDone) await awardXP(user.id, XP_REWARDS.ALL_HABITS_DAY, "Всі звички за день");
-    }
-  }
-
-  async function saveHabitNote(habit: Habit) {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-    const existing = logs.find((l) => l.habit_id === habit.id);
-
-    await supabase.from("daily_logs").upsert(
-      {
-        user_id: user.id,
-        habit_id: habit.id,
-        date: today,
-        completed: existing?.completed ?? false,
-        note: noteValues[habit.id] || null,
-        value: numValues[habit.id] ? parseFloat(numValues[habit.id]) : null,
-      },
-      { onConflict: "user_id,habit_id,date" }
-    );
-  }
-
-  async function addNewSkill() {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !newSkill.name.trim()) return;
-
-    const { data: skill } = await supabase.from("skills").insert({
+    await supabase.from("tasks").insert({
       user_id: user.id,
-      name: newSkill.name,
-      icon: newSkill.icon,
-      category: "custom",
-      color: "#00FF85",
-      sort_order: skills.length,
-    }).select().single();
-
-    if (skill) {
-      for (let i = 0; i < newSkill.habits.length; i++) {
-        if (newSkill.habits[i].trim()) {
-          await supabase.from("habits").insert({
-            user_id: user.id,
-            skill_id: skill.id,
-            name: newSkill.habits[i].trim(),
-            type: "checkbox",
-            sort_order: i,
-          });
-        }
-      }
-    }
-
-    setAddSkillOpen(false);
-    setNewSkill({ name: "", icon: "⭐", habits: [""] });
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      status: form.status,
+      due_date: form.due_date || null,
+      priority: 0,
+    });
+    setAddOpen(false);
+    setForm({ title: "", description: "", due_date: "", status: activeColumn });
     await load();
+    showToast("Завдання додано ✓");
   }
+
+  async function moveTask(id: string, status: ColId) {
+    await supabase.from("tasks").update({ status }).eq("id", id);
+    setTasks((prev) => prev.map((t) => t.id === id ? { ...t, status } : t));
+  }
+
+  async function deleteTask(id: string) {
+    await supabase.from("tasks").delete().eq("id", id);
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  const columnTasks = tasks.filter((t) => t.status === activeColumn);
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] pt-safe px-4">
-      <header className="pt-4 pb-2">
-        <h1 className="text-2xl font-black text-white">🧠 Фокус</h1>
+    <div className="h-screen flex flex-col bg-[#0a0a0a] pt-safe overflow-hidden">
+      <header className="shrink-0 px-4 pt-4 pb-3 flex items-center justify-between">
+        <h1 className="text-2xl font-black text-white">⚡ Завдання</h1>
+        <button
+          onClick={() => { setForm((f) => ({ ...f, status: activeColumn })); setAddOpen(true); }}
+          className="w-9 h-9 bg-[#00FF85] rounded-full flex items-center justify-center"
+        >
+          <Plus size={20} className="text-black" strokeWidth={3} />
+        </button>
       </header>
 
-      {/* Manual Deep Work logging */}
-      <div className="bg-[#111111] rounded-2xl p-4 mb-4">
-        <p className="text-white font-semibold mb-1">⚡ Deep Work</p>
-        <p className="text-[#6b7280] text-xs mb-4">Скільки годин глибокої роботи сьогодні?</p>
-        <div className="flex items-center gap-3">
-          <div className="flex-1 bg-[#1a1a1a] rounded-xl h-[52px] flex items-center px-4">
-            <input
-              type="number"
-              inputMode="decimal"
-              value={deepWorkHours}
-              onChange={(e) => setDeepWorkHours(e.target.value)}
-              placeholder="0"
-              className="bg-transparent text-white text-2xl font-bold w-full outline-none"
-            />
-            <span className="text-[#6b7280] text-sm shrink-0">год</span>
+      {/* Column tabs */}
+      <div className="shrink-0 flex gap-2 px-4 pb-3 overflow-x-auto scrollbar-hide">
+        {COLUMNS.map((col) => {
+          const count = tasks.filter((t) => t.status === col.id).length;
+          const active = activeColumn === col.id;
+          return (
+            <button
+              key={col.id}
+              onClick={() => setActiveColumn(col.id)}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium transition-all"
+              style={active ? { backgroundColor: col.color, color: col.id === "done" ? "#000" : "#fff" } : { backgroundColor: "#1a1a1a", color: "#6b7280" }}
+            >
+              <span>{col.icon}</span>
+              <span>{col.label}</span>
+              {count > 0 && (
+                <span className={cn("text-xs px-1.5 py-0.5 rounded-full", active ? "bg-black/20" : "bg-white/10 text-white")}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tasks list */}
+      <div className="flex-1 overflow-y-auto px-4 pb-28">
+        {columnTasks.length === 0 ? (
+          <div className="text-center py-16">
+            <p className="text-5xl mb-3">{COLUMNS.find((c) => c.id === activeColumn)?.icon}</p>
+            <p className="text-[#6b7280] text-sm">Немає завдань</p>
           </div>
-          <Button
-            onClick={async () => {
-              const h = parseFloat(deepWorkHours);
-              if (!h || h <= 0) return;
-              await addManual(h);
-              setDeepWorkHours("");
-            }}
-            className="h-[52px] px-6 bg-[#00FF85] text-black font-semibold rounded-xl"
-          >
-            Зберегти
-          </Button>
-        </div>
-        {todayMinutes > 0 && (
-          <p className="text-[#00FF85] text-sm mt-3">
-            Сьогодні: {formatMinutes(todayMinutes)}
-          </p>
+        ) : (
+          <div className="space-y-3 pt-2">
+            {columnTasks
+              .sort((a, b) => b.priority - a.priority)
+              .map((task) => (
+                <TaskCard key={task.id} task={task} onMove={moveTask} onDelete={deleteTask} />
+              ))}
+          </div>
         )}
       </div>
 
-      {/* Skills accordion */}
-      <div className="space-y-3 pb-4">
-        {skills.map((skill) => {
-          const skillHabits = habits.filter((h) => h.skill_id === skill.id);
-          const completedCount = skillHabits.filter((h) =>
-            logs.some((l) => l.habit_id === h.id && l.completed)
-          ).length;
-          const pct = skillHabits.length > 0
-            ? Math.round((completedCount / skillHabits.length) * 100)
-            : 0;
-          const isOpen = expanded[skill.id];
-
-          return (
-            <div key={skill.id} className="bg-[#111111] rounded-2xl overflow-hidden">
-              <button
-                onClick={() => setExpanded((p) => ({ ...p, [skill.id]: !isOpen }))}
-                className="w-full flex items-center justify-between p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">{skill.icon}</span>
-                  <div className="text-left">
-                    <p className="text-white font-semibold">{skill.name}</p>
-                    <p className="text-[#6b7280] text-xs">
-                      {completedCount}/{skillHabits.length} · {pct}%
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-16 h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#00FF85] rounded-full transition-all"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  {isOpen ? <ChevronUp size={16} className="text-[#6b7280]" /> : <ChevronDown size={16} className="text-[#6b7280]" />}
-                </div>
-              </button>
-
-              {isOpen && (
-                <div className="px-4 pb-4 border-t border-white/5 pt-3">
-                  {skillHabits.length === 0 ? (
-                    <div className="py-6 text-center">
-                      <p className="text-gray-600 text-sm">Немає звичок</p>
-                      <p className="text-gray-700 text-xs mt-1">Додай свої звички в Налаштуваннях</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {skillHabits.map((habit) => {
-                        const log = logs.find((l) => l.habit_id === habit.id);
-                        const done = log?.completed ?? false;
-                        return (
-                          <div key={habit.id} className="space-y-2">
-                            <div className="flex items-center gap-3">
-                              <button
-                                onClick={() => toggleHabit(habit, habit.type)}
-                                className={cn(
-                                  "w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all flex-shrink-0",
-                                  done ? "bg-[#00FF85] border-[#00FF85] text-black" : "border-white/20"
-                                )}
-                              >
-                                {done && <span className="text-xs font-black">✓</span>}
-                              </button>
-                              <span className={cn("text-sm flex-1", done ? "text-white line-through opacity-60" : "text-white")}>
-                                {habit.name}
-                              </span>
-                            </div>
-                            {done && (habit.type === "note" || habit.type === "counter" || habit.type === "duration") && (
-                              <div className="ml-9 animate-fade-in">
-                                {habit.type === "note" ? (
-                                  <Textarea
-                                    value={noteValues[habit.id] ?? log?.note ?? ""}
-                                    onChange={(e) => setNoteValues((p) => ({ ...p, [habit.id]: e.target.value }))}
-                                    onBlur={() => saveHabitNote(habit)}
-                                    placeholder="Що конкретно зробив?"
-                                    rows={2}
-                                    className="bg-[#1a1a1a] border-white/10 text-white placeholder:text-white/20 resize-none text-xs"
-                                  />
-                                ) : (
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="number"
-                                      inputMode="numeric"
-                                      value={numValues[habit.id] ?? log?.value?.toString() ?? ""}
-                                      onChange={(e) => setNumValues((p) => ({ ...p, [habit.id]: e.target.value }))}
-                                      onBlur={() => saveHabitNote(habit)}
-                                      placeholder={habit.type === "counter" ? "Кількість" : "Хвилин"}
-                                      className="w-24 bg-[#1a1a1a] border border-white/10 rounded-lg px-2 py-1.5 text-white text-xs outline-none"
-                                    />
-                                    <span className="text-[#6b7280] text-xs">
-                                      {habit.type === "counter" ? "разів" : "хв"}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        <button
-          onClick={() => setAddSkillOpen(true)}
-          className="w-full bg-[#111111]/50 border border-dashed border-white/10 rounded-2xl p-4 flex items-center justify-center gap-2 text-[#6b7280] text-sm"
-        >
-          <PlusCircle size={16} /> Додати скіл
-        </button>
-      </div>
-
-      <BottomSheet open={addSkillOpen} onClose={() => setAddSkillOpen(false)} title="Новий скіл">
+      {/* Add task sheet */}
+      <BottomSheet open={addOpen} onClose={() => setAddOpen(false)} title="Нове завдання">
         <div className="space-y-4 pb-6">
-          <div className="flex gap-3">
-            <div className="w-20">
-              <Label className="text-[#6b7280] text-xs">Іконка</Label>
-              <Input
-                value={newSkill.icon}
-                onChange={(e) => setNewSkill((s) => ({ ...s, icon: e.target.value }))}
-                className="mt-1 bg-[#1a1a1a] border-white/10 text-white text-2xl text-center h-12"
-              />
-            </div>
-            <div className="flex-1">
-              <Label className="text-[#6b7280] text-xs">Назва</Label>
-              <Input
-                value={newSkill.name}
-                onChange={(e) => setNewSkill((s) => ({ ...s, name: e.target.value }))}
-                placeholder="Назва скіла"
-                className="mt-1 bg-[#1a1a1a] border-white/10 text-white h-12"
-              />
-            </div>
-          </div>
-
           <div>
-            <Label className="text-[#6b7280] text-xs mb-2 block">Звички (1-3)</Label>
-            {newSkill.habits.map((h, i) => (
-              <Input
-                key={i}
-                value={h}
-                onChange={(e) => {
-                  const updated = [...newSkill.habits];
-                  updated[i] = e.target.value;
-                  setNewSkill((s) => ({ ...s, habits: updated }));
-                }}
-                placeholder={`Звичка ${i + 1}`}
-                className="mb-2 bg-[#1a1a1a] border-white/10 text-white h-11"
-              />
-            ))}
-            {newSkill.habits.length < 3 && (
-              <button
-                onClick={() => setNewSkill((s) => ({ ...s, habits: [...s.habits, ""] }))}
-                className="text-[#6b7280] text-xs flex items-center gap-1"
-              >
-                <PlusCircle size={12} /> Додати звичку
-              </button>
-            )}
+            <Label className="text-[#6b7280] text-xs">Назва *</Label>
+            <Input
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="Що потрібно зробити?"
+              autoFocus
+              className="mt-1 bg-[#1a1a1a] border-white/10 text-white h-12"
+            />
           </div>
-
+          <div>
+            <Label className="text-[#6b7280] text-xs">Опис</Label>
+            <Input
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder="Деталі..."
+              className="mt-1 bg-[#1a1a1a] border-white/10 text-white h-12"
+            />
+          </div>
+          <div>
+            <Label className="text-[#6b7280] text-xs">Дедлайн</Label>
+            <Input
+              type="date"
+              value={form.due_date}
+              onChange={(e) => setForm((f) => ({ ...f, due_date: e.target.value }))}
+              className="mt-1 bg-[#1a1a1a] border-white/10 text-white h-12"
+            />
+          </div>
+          <div>
+            <Label className="text-[#6b7280] text-xs mb-2 block">Колонка</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {COLUMNS.map((col) => (
+                <button
+                  key={col.id}
+                  onClick={() => setForm((f) => ({ ...f, status: col.id }))}
+                  className={cn("py-2 rounded-xl text-sm font-medium transition-all border", form.status === col.id ? "border-current" : "border-white/10 text-[#6b7280]")}
+                  style={form.status === col.id ? { borderColor: col.color, color: col.color } : {}}
+                >
+                  {col.icon} {col.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <Button
-            onClick={addNewSkill}
-            disabled={!newSkill.name.trim()}
+            onClick={saveTask}
+            disabled={!form.title.trim()}
             className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl"
           >
-            Створити скіл
+            Додати завдання
           </Button>
         </div>
       </BottomSheet>
