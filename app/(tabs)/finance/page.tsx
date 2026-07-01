@@ -18,6 +18,16 @@ import { XP_REWARDS } from "@/lib/xp";
 
 type TxType = "expense" | "income" | "transfer";
 
+type CheckItem = {
+  id: string;
+  amount: number;
+  categoryId: string;
+  subcategoryId: string;
+  categoryName: string;
+  subcategoryName: string;
+  categoryIcon: string;
+};
+
 function formatMoney(amount: number, currency: string): string {
   const symbol = currency === "UAH" ? "₴" : currency === "USD" ? "$" : "€";
   const formatted = new Intl.NumberFormat("uk-UA", {
@@ -46,6 +56,10 @@ export default function FinancePage() {
   const [subcategories, setSubcategories] = useState<ExpenseCategory[]>([]);
   const [subcategorySearch, setSubcategorySearch] = useState("");
   const [visibleCount, setVisibleCount] = useState(30);
+  const [checkItems, setCheckItems] = useState<CheckItem[]>([]);
+  const [addingItem, setAddingItem] = useState(false);
+  const [itemForm, setItemForm] = useState({ amount: "", categoryId: "", subcategoryId: "" });
+  const [itemSubcats, setItemSubcats] = useState<ExpenseCategory[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [userId, setUserId] = useState<string>("");
@@ -235,6 +249,69 @@ export default function FinancePage() {
     });
     setSubcategories([]);
     setSubcategorySearch("");
+    setCheckItems([]);
+    setAddingItem(false);
+    setItemForm({ amount: "", categoryId: "", subcategoryId: "" });
+    setItemSubcats([]);
+  }
+
+  async function handleItemCategorySelect(catId: string) {
+    setItemForm((f) => ({ ...f, categoryId: catId, subcategoryId: "" }));
+    const { data } = await supabase.from("expense_categories").select("*").eq("user_id", userId).eq("parent_id", catId);
+    setItemSubcats(data ?? []);
+  }
+
+  function addItemToCheck() {
+    const amount = parseAmount(itemForm.amount);
+    if (!amount || !itemForm.categoryId) return;
+    const cat = filteredCategories.find((c) => c.id === itemForm.categoryId);
+    const sub = itemSubcats.find((s) => s.id === itemForm.subcategoryId);
+    const item: CheckItem = {
+      id: crypto.randomUUID(),
+      amount,
+      categoryId: itemForm.categoryId,
+      subcategoryId: itemForm.subcategoryId,
+      categoryName: cat?.name ?? "",
+      subcategoryName: sub?.name ?? "",
+      categoryIcon: cat?.icon ?? "💡",
+    };
+    setCheckItems((prev) => [...prev, item]);
+    setItemForm({ amount: "", categoryId: "", subcategoryId: "" });
+    setItemSubcats([]);
+    setAddingItem(false);
+  }
+
+  async function saveCheck() {
+    if (!txForm.accountId || checkItems.length === 0) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const account = accounts.find((a) => a.id === txForm.accountId);
+    const today = format(new Date(), "yyyy-MM-dd");
+    let totalDelta = 0;
+    for (const item of checkItems) {
+      const signed = txType === "expense" ? -item.amount : item.amount;
+      totalDelta += signed;
+      await supabase.from("transactions").insert({
+        user_id: user.id,
+        account_id: txForm.accountId,
+        category_id: item.categoryId || null,
+        subcategory_id: item.subcategoryId || null,
+        amount: signed,
+        currency: account?.currency ?? "EUR",
+        amount_eur: toEur(Math.abs(signed), account?.currency ?? "EUR") * Math.sign(signed),
+        date: today,
+      });
+    }
+    await supabase.from("finance_accounts")
+      .update({ current_balance: roundMoney((account?.current_balance ?? 0) + totalDelta) })
+      .eq("id", txForm.accountId);
+    await awardXP(user.id, XP_REWARDS.FINANCE_TRANSACTION, "Транзакція записана");
+    await checkTransactionAchievements(user.id);
+    await load();
+    setAddOpen(false);
+    resetForm();
+    showToast(`Збережено ${checkItems.length} позиц. ✓`);
+    if (navigator.vibrate) navigator.vibrate(10);
   }
 
   async function deleteTx(tx: Transaction) {
@@ -417,7 +494,7 @@ export default function FinancePage() {
         onClose={() => { setAddOpen(false); resetForm(); }}
         title="Нова транзакція"
       >
-        <div className="space-y-5 pb-6">
+        <div className="space-y-4 pb-6">
           {/* Type toggle */}
           <div className="grid grid-cols-3 gap-1 p-1 bg-[#1a1a1a] rounded-2xl">
             {TX_TYPES.map(({ value, label }) => (
@@ -440,230 +517,170 @@ export default function FinancePage() {
             ))}
           </div>
 
-          {/* Amount */}
-          <div className="bg-[#1a1a1a] rounded-2xl px-4 py-6 text-center">
-            <div className="flex items-baseline justify-center gap-2">
-              <input
-                ref={amountRef}
-                type="text"
-                inputMode="decimal"
-                value={txForm.amount}
-                onChange={(e) => {
-                  // Accept both comma and dot as decimal separator, digits only otherwise
-                  let v = e.target.value.replace(/[^0-9.,]/g, "");
-                  // Normalise: only one decimal separator allowed
-                  const norm = v.replace(",", ".");
-                  if ((norm.match(/\./g) ?? []).length > 1) {
-                    const parts = norm.split(".");
-                    v = parts[0] + "," + parts.slice(1).join("");
-                  }
-                  setTxForm((f) => ({ ...f, amount: v }));
-                }}
-                placeholder="0"
-                className="bg-transparent text-white text-6xl font-black text-center outline-none border-none placeholder:text-white/20 w-[200px]"
-              />
-              <span className="text-2xl text-[#6b7280] font-medium">
-                {accounts.find((a) => a.id === txForm.accountId)?.currency ?? "EUR"}
-              </span>
-            </div>
-          </div>
-
-          {/* Account selector or Transfer selectors */}
-          {txType !== "transfer" ? (
-            <div>
-              <Label className="text-[#6b7280] text-xs mb-1.5 block">Рахунок</Label>
-              <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-                {accounts.map((a) => (
-                  <button
-                    key={a.id}
-                    onClick={() => setTxForm((f) => ({ ...f, accountId: a.id }))}
-                    className={cn(
-                      "shrink-0 px-3 py-2 rounded-xl text-sm border transition-all",
-                      txForm.accountId === a.id
-                        ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]"
-                        : "border-white/10 text-[#6b7280]"
-                    )}
-                  >
-                    {a.icon} {a.name}
-                  </button>
-                ))}
+          {/* TRANSFER mode */}
+          {txType === "transfer" && (
+            <div className="space-y-4">
+              <div className="bg-[#1a1a1a] rounded-2xl px-4 py-5 text-center">
+                <input
+                  ref={amountRef}
+                  type="text"
+                  inputMode="decimal"
+                  value={txForm.amount}
+                  onChange={(e) => setTxForm((f) => ({ ...f, amount: e.target.value.replace(/[^0-9.,]/g, "") }))}
+                  placeholder="0"
+                  className="bg-transparent text-white text-5xl font-black text-center outline-none w-[180px]"
+                />
               </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <div className="flex-1 min-w-0">
-                <Label className="text-[#6b7280] text-xs mb-1.5 block">З рахунку</Label>
-                <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-1">
-                  {accounts.map((a) => (
-                    <button
-                      key={a.id}
-                      onClick={() => setTxForm((f) => ({ ...f, accountId: a.id }))}
-                      className={cn(
-                        "shrink-0 px-2.5 py-1.5 rounded-xl text-xs border transition-all",
-                        txForm.accountId === a.id
-                          ? "border-[#3b82f6] bg-[#3b82f6]/10 text-[#3b82f6]"
-                          : "border-white/10 text-[#6b7280]"
-                      )}
-                    >
-                      {a.icon} {a.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <ArrowRight size={18} className="text-[#6b7280] shrink-0 mt-4" />
-              <div className="flex-1 min-w-0">
-                <Label className="text-[#6b7280] text-xs mb-1.5 block">На рахунок</Label>
-                <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-1">
-                  {accounts
-                    .filter((a) => a.id !== txForm.accountId)
-                    .map((a) => (
-                      <button
-                        key={a.id}
-                        onClick={() => setTxForm((f) => ({ ...f, toAccountId: a.id }))}
-                        className={cn(
-                          "shrink-0 px-2.5 py-1.5 rounded-xl text-xs border transition-all",
-                          txForm.toAccountId === a.id
-                            ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]"
-                            : "border-white/10 text-[#6b7280]"
-                        )}
-                      >
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0">
+                  <Label className="text-[#6b7280] text-xs mb-1.5 block">З рахунку</Label>
+                  <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-1">
+                    {accounts.map((a) => (
+                      <button key={a.id} onClick={() => setTxForm((f) => ({ ...f, accountId: a.id }))}
+                        className={cn("shrink-0 px-2.5 py-1.5 rounded-xl text-xs border transition-all",
+                          txForm.accountId === a.id ? "border-[#3b82f6] bg-[#3b82f6]/10 text-[#3b82f6]" : "border-white/10 text-[#6b7280]")}>
                         {a.icon} {a.name}
                       </button>
                     ))}
+                  </div>
+                </div>
+                <ArrowRight size={18} className="text-[#6b7280] shrink-0 mt-4" />
+                <div className="flex-1 min-w-0">
+                  <Label className="text-[#6b7280] text-xs mb-1.5 block">На рахунок</Label>
+                  <div className="flex gap-1.5 overflow-x-auto scrollbar-hide pb-1">
+                    {accounts.filter((a) => a.id !== txForm.accountId).map((a) => (
+                      <button key={a.id} onClick={() => setTxForm((f) => ({ ...f, toAccountId: a.id }))}
+                        className={cn("shrink-0 px-2.5 py-1.5 rounded-xl text-xs border transition-all",
+                          txForm.toAccountId === a.id ? "border-[#00FF85] bg-[#00FF85]/10 text-[#00FF85]" : "border-white/10 text-[#6b7280]")}>
+                        {a.icon} {a.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
+              <Button onClick={saveTx} disabled={saveDisabled}
+                className="w-full h-12 bg-[#3b82f6] text-white font-bold rounded-2xl disabled:opacity-40">
+                Перевести
+              </Button>
             </div>
           )}
 
-          {/* Category grid (not for transfer) */}
+          {/* CHECK mode — expense / income */}
           {txType !== "transfer" && (
-            <div>
-              <Label className="text-[#6b7280] text-xs mb-1.5 block">Категорія (необов&apos;язково)</Label>
-              {filteredCategories.length === 0 ? (
-                <p className="text-[#6b7280] text-xs bg-[#1a1a1a] rounded-xl p-3">
-                  {txType === "income"
-                    ? "Додай категорії доходу в Налаштування → Фінанси"
-                    : "Додай категорії в Налаштування → Фінанси"}
-                </p>
-              ) : (
-                <>
-                  <div className="grid grid-cols-3 gap-2">
-                    {filteredCategories.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => handleCategorySelect(c.id)}
-                        className={cn(
-                          "flex flex-col items-center gap-1 py-3 rounded-xl border transition-all",
-                          txForm.categoryId === c.id
-                            ? "border-[#00FF85] bg-[#00FF85]/10"
-                            : "border-white/10 bg-[#1a1a1a]"
-                        )}
-                      >
-                        <span className="text-2xl">{c.icon}</span>
-                        <span
-                          className={cn(
-                            "text-[10px] font-medium leading-tight text-center px-1",
-                            txForm.categoryId === c.id ? "text-[#00FF85]" : "text-[#6b7280]"
-                          )}
-                        >
-                          {c.name}
-                        </span>
-                      </button>
-                    ))}
-                    {/* "New category" shortcut */}
-                    <button
-                      onClick={() => { setAddOpen(false); router.push("/settings"); }}
-                      className="flex flex-col items-center gap-1 py-3 rounded-xl border border-dashed border-white/20 bg-[#1a1a1a] transition-all"
-                    >
-                      <Settings2 size={22} className="text-[#6b7280]" />
-                      <span className="text-[10px] font-medium text-[#6b7280]">Нова</span>
-                    </button>
-                  </div>
-                  {txForm.categoryId && (
-                    <div className="mt-2">
-                      <div className="relative mb-1.5">
-                        <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6b7280]" />
-                        <input
-                          type="text"
-                          value={subcategorySearch}
-                          onChange={(e) => setSubcategorySearch(e.target.value)}
-                          placeholder="Підкатегорія..."
-                          className="w-full bg-[#1a1a1a] border border-white/10 rounded-xl pl-8 pr-3 py-2 text-sm text-white placeholder:text-gray-600 outline-none"
-                        />
-                      </div>
-                      <div className="max-h-[160px] overflow-y-auto space-y-1">
-                        {subcategories
-                          .filter((s) => s.name.toLowerCase().includes(subcategorySearch.toLowerCase()))
-                          .map((s) => (
-                            <button
-                              key={s.id}
-                              onClick={() => setTxForm((f) => ({ ...f, subcategoryId: f.subcategoryId === s.id ? "" : s.id }))}
-                              className={cn(
-                                "w-full text-left px-3 py-2 rounded-xl text-sm transition-all",
-                                txForm.subcategoryId === s.id
-                                  ? "bg-[#00FF85]/15 text-[#00FF85] border border-[#00FF85]/30"
-                                  : "text-white/70 bg-[#1a1a1a]"
-                              )}
-                            >
-                              {s.name}
-                            </button>
-                          ))}
-                        {subcategorySearch.trim() && !subcategories.find((s) => s.name.toLowerCase() === subcategorySearch.trim().toLowerCase()) && (
-                          <button
-                            onClick={() => addSubcategoryInline(subcategorySearch.trim())}
-                            className="w-full text-left px-3 py-2 rounded-xl text-sm text-[#00FF85] bg-[#00FF85]/5 border border-dashed border-[#00FF85]/30"
-                          >
-                            + Додати &quot;{subcategorySearch.trim()}&quot;
-                          </button>
-                        )}
-                        {subcategories.length > 0 && (
-                          <button
-                            onClick={() => setTxForm((f) => ({ ...f, subcategoryId: "" }))}
-                            className="w-full text-left px-3 py-2 rounded-xl text-sm text-[#6b7280]"
-                          >
-                            Без підкатегорії
-                          </button>
-                        )}
-                        {subcategories.length === 0 && !subcategorySearch && (
-                          <p className="text-[#6b7280] text-xs px-3 py-2">Введи назву для створення підкатегорії</p>
-                        )}
-                      </div>
+            <div className="space-y-3">
+              {/* Added items */}
+              {checkItems.map((item) => (
+                <div key={item.id} className="flex items-center gap-3 bg-[#1a1a1a] rounded-xl px-4 py-3">
+                  <span className="text-xl">{item.categoryIcon}</span>
+                  <p className="flex-1 text-white text-sm truncate">
+                    {item.subcategoryName ? `${item.categoryName} / ${item.subcategoryName}` : item.categoryName}
+                  </p>
+                  <p className="text-white font-semibold text-sm shrink-0">
+                    {accounts.find((a) => a.id === txForm.accountId)?.currency === "UAH" ? "₴" : accounts.find((a) => a.id === txForm.accountId)?.currency === "USD" ? "$" : "€"}
+                    {item.amount.toFixed(2)}
+                  </p>
+                  <button onClick={() => setCheckItems((prev) => prev.filter((i) => i.id !== item.id))}
+                    className="text-[#6b7280] active:text-[#ef4444] shrink-0">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+
+              {/* Inline add-item form */}
+              {addingItem ? (
+                <div className="bg-[#1a1a1a] rounded-2xl p-4 space-y-3">
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoFocus
+                    value={itemForm.amount}
+                    onChange={(e) => setItemForm((f) => ({ ...f, amount: e.target.value.replace(/[^0-9.,]/g, "") }))}
+                    placeholder="0.00"
+                    className="w-full bg-[#111] rounded-xl px-4 py-3 text-white text-3xl font-black text-center outline-none"
+                    style={{ fontSize: "28px" }}
+                  />
+                  {filteredCategories.length === 0 ? (
+                    <p className="text-[#6b7280] text-xs text-center py-2">
+                      Додай категорії в Налаштування → Фінанси
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-2">
+                      {filteredCategories.map((c) => (
+                        <button key={c.id}
+                          onClick={() => handleItemCategorySelect(c.id)}
+                          className={cn("flex flex-col items-center gap-1 py-2.5 rounded-xl border transition-all",
+                            itemForm.categoryId === c.id ? "border-[#00FF85] bg-[#00FF85]/10" : "border-white/10")}>
+                          <span className="text-xl">{c.icon}</span>
+                          <span className={cn("text-[9px] font-medium text-center px-0.5 leading-tight",
+                            itemForm.categoryId === c.id ? "text-[#00FF85]" : "text-[#6b7280]")}>
+                            {c.name}
+                          </span>
+                        </button>
+                      ))}
                     </div>
                   )}
+                  {itemSubcats.length > 0 && (
+                    <div className="flex gap-2 flex-wrap">
+                      {itemSubcats.map((s) => (
+                        <button key={s.id}
+                          onClick={() => setItemForm((f) => ({ ...f, subcategoryId: f.subcategoryId === s.id ? "" : s.id }))}
+                          className={cn("px-3 py-1.5 rounded-xl text-xs border transition-all",
+                            itemForm.subcategoryId === s.id ? "border-[#00FF85] text-[#00FF85]" : "border-white/10 text-[#6b7280]")}>
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <button onClick={() => { setAddingItem(false); setItemForm({ amount: "", categoryId: "", subcategoryId: "" }); setItemSubcats([]); }}
+                      className="flex-1 py-3 bg-[#111] rounded-xl text-[#6b7280] text-sm">
+                      Скасувати
+                    </button>
+                    <button onClick={addItemToCheck}
+                      disabled={!itemForm.amount || !itemForm.categoryId}
+                      className="flex-1 py-3 bg-[#00FF85] rounded-xl text-black font-semibold text-sm disabled:opacity-40">
+                      Додати
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setAddingItem(true)}
+                  className="w-full py-3 border-2 border-dashed border-white/20 rounded-2xl text-[#6b7280] text-sm flex items-center justify-center gap-2">
+                  <Plus size={16} /> Додати позицію
+                </button>
+              )}
+
+              {/* Total + account + save */}
+              {checkItems.length > 0 && (
+                <>
+                  <div className="flex justify-between items-center px-2 py-2 border-t border-white/10">
+                    <p className="text-[#6b7280] font-medium text-sm">Разом:</p>
+                    <p className="text-white text-xl font-black">
+                      {txType === "expense" ? "−" : "+"}
+                      {(() => { const s = accounts.find((a) => a.id === txForm.accountId)?.currency; return s === "UAH" ? "₴" : s === "USD" ? "$" : "€"; })()}
+                      {checkItems.reduce((s, i) => s + i.amount, 0).toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[#6b7280] text-xs mb-2">Рахунок</p>
+                    <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+                      {accounts.map((a) => (
+                        <button key={a.id} onClick={() => setTxForm((f) => ({ ...f, accountId: a.id }))}
+                          className={cn("shrink-0 px-3 py-2 rounded-xl text-sm border transition-all",
+                            txForm.accountId === a.id ? "border-[#00FF85] text-[#00FF85]" : "border-white/10 text-[#6b7280]")}>
+                          {a.icon} {a.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <Button onClick={saveCheck} disabled={!txForm.accountId}
+                    className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl">
+                    Зберегти {checkItems.length} позиц.
+                  </Button>
                 </>
               )}
             </div>
           )}
-
-          {/* Description */}
-          <div>
-            <Label className="text-[#6b7280] text-xs mb-1.5 block">Опис (необов&apos;язково)</Label>
-            <Input
-              value={txForm.description}
-              onChange={(e) => setTxForm((f) => ({ ...f, description: e.target.value }))}
-              placeholder="Кофе, обід, транспорт..."
-              className="bg-[#1a1a1a] border-white/10 text-white h-11 focus-visible:ring-[#00FF85]/50"
-            />
-          </div>
-
-          {/* Date */}
-          <div>
-            <Label className="text-[#6b7280] text-xs mb-1.5 block">Дата</Label>
-            <Input
-              type="date"
-              value={txForm.date}
-              onChange={(e) => setTxForm((f) => ({ ...f, date: e.target.value }))}
-              className="bg-[#1a1a1a] border-white/10 text-white h-11 focus-visible:ring-[#00FF85]/50"
-            />
-          </div>
-
-          <Button
-            onClick={saveTx}
-            disabled={saveDisabled}
-            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl disabled:opacity-40"
-          >
-            Зберегти
-          </Button>
         </div>
       </BottomSheet>
 
