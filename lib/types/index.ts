@@ -44,6 +44,7 @@ export interface Skill {
   category: "body" | "focus" | "social" | "finance" | "custom";
   sort_order: number;
   is_active: boolean;
+  is_featured?: boolean;
   season_id: string | null;
   created_at: string;
   habits?: Habit[];

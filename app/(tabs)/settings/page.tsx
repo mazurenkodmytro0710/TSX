@@ -331,6 +331,15 @@ export default function SettingsPage() {
     setSkills((prev) => prev.map((s) => s.id === skillId ? { ...s, is_active: active } : s));
   }
 
+  async function toggleFeatured(skillId: string, featured: boolean) {
+    if (featured) {
+      const count = skills.filter((s) => s.is_featured).length;
+      if (count >= 4) { showToast("Максимум 4 скіли на головній", "error"); return; }
+    }
+    await supabase.from("skills").update({ is_featured: featured }).eq("id", skillId).eq("user_id", userId);
+    setSkills((prev) => prev.map((s) => s.id === skillId ? { ...s, is_featured: featured } : s));
+  }
+
   async function confirmAddHabit(skillId: string) {
     if (!newHabitName.trim()) return;
     const { data: { user } } = await supabase.auth.getUser();
@@ -678,6 +687,14 @@ export default function SettingsPage() {
                     </button>
                     <button onClick={() => setExpandedSkillId(isOpen ? null : skill.id)} className="text-[#6b7280]">
                       {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </button>
+                    {/* Featured on home toggle */}
+                    <button
+                      onClick={() => toggleFeatured(skill.id, !skill.is_featured)}
+                      className={cn("text-base transition-all shrink-0", skill.is_featured ? "opacity-100" : "opacity-30")}
+                      title={skill.is_featured ? "Прибрати з головної" : "Показати на головній"}
+                    >
+                      ⭐
                     </button>
                     {/* Visibility toggle */}
                     <button

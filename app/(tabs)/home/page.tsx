@@ -172,10 +172,50 @@ export default function HomePage() {
           <p className="text-white/60 text-sm italic leading-relaxed">&ldquo;{quote}&rdquo;</p>
         </div>
 
+        {/* Featured skills grid */}
+        {skills.length > 0 && (() => {
+          const featured = skills.some((s) => s.is_featured)
+            ? skills.filter((s) => s.is_featured).slice(0, 4)
+            : skills.slice(0, 4);
+          if (featured.length === 0) return null;
+          return (
+            <div className="space-y-2">
+              <p className="text-[#6b7280] text-xs uppercase tracking-wider">Скіли сьогодні</p>
+              <div className="grid grid-cols-2 gap-2">
+                {featured.map((skill) => {
+                  const skillHabits = allHabits.filter((h) => h.skill_id === skill.id);
+                  const done = skillHabits.filter((h) => logs.some((l) => l.habit_id === h.id && l.completed)).length;
+                  const total = skillHabits.length;
+                  const pct = total > 0 ? (done / total) * 100 : 0;
+                  const allDone = total > 0 && done === total;
+                  return (
+                    <div key={skill.id} className="bg-[#111111] rounded-2xl p-4 flex flex-col justify-between aspect-square">
+                      <div className="flex items-center justify-between">
+                        <span className="text-3xl">{skill.icon}</span>
+                        {allDone && <span className="text-[#00FF85] text-xs font-bold">✓</span>}
+                      </div>
+                      <div>
+                        <p className="text-white font-bold text-sm">{skill.name}</p>
+                        <p className="text-[#6b7280] text-xs mt-0.5">{done}/{total} сьогодні</p>
+                        <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-[#00FF85] rounded-full transition-all"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Skills accordion */}
         {skills.length > 0 ? (
           <div className="space-y-2">
-            <p className="text-[#6b7280] text-xs uppercase tracking-wider">Скіли</p>
+            <p className="text-[#6b7280] text-xs uppercase tracking-wider">Всі звички</p>
             {skills.map((skill) => {
               const skillHabits = allHabits.filter((h) => h.skill_id === skill.id);
               const doneCount = skillHabits.filter((h) =>
