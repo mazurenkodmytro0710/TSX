@@ -1,17 +1,17 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { format, differenceInDays } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import type { BodyMeasurement } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { BottomSheet } from "@/components/layout/BottomSheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { Trash2 } from "lucide-react";
 import { showToast } from "@/components/ui/Toaster";
 import { awardXP, checkMeasurementAchievements } from "@/lib/achievements";
 import { XP_REWARDS } from "@/lib/xp";
+import { format, differenceInDays } from "date-fns";
 
 const FIELDS: { key: keyof BodyMeasurement; label: string; unit: string }[] = [
   { key: "weight_kg", label: "Вага", unit: "кг" },
@@ -21,6 +21,15 @@ const FIELDS: { key: keyof BodyMeasurement; label: string; unit: string }[] = [
   { key: "bicep_cm", label: "Біцепс", unit: "см" },
   { key: "legs_cm", label: "Ноги", unit: "см" },
 ];
+
+function MeasRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="bg-[#1a1a1a] rounded-xl p-2 text-center">
+      <p className="text-white font-bold text-sm">{value}</p>
+      <p className="text-[#6b7280] text-xs">{label}</p>
+    </div>
+  );
+}
 
 export function MeasurementsSection() {
   const [measurements, setMeasurements] = useState<BodyMeasurement[]>([]);
@@ -43,9 +52,29 @@ export function MeasurementsSection() {
       .from("body_measurements")
       .select("*")
       .eq("user_id", user.id)
-      .order("date", { ascending: false })
-      .limit(30);
+      .order("date", { ascending: false });
     setMeasurements(data ?? []);
+  }
+
+  async function checkCanAdd(): Promise<boolean> {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const { data } = await supabase
+      .from("body_measurements")
+      .select("id, date")
+      .eq("user_id", user.id)
+      .gte("date", oneWeekAgo.toISOString().split("T")[0])
+      .order("date", { ascending: false })
+      .limit(1);
+    if (data && data.length > 0) {
+      const daysAgo = differenceInDays(new Date(), new Date(data[0].date));
+      const daysLeft = 7 - daysAgo;
+      showToast(`Наступні заміри через ${daysLeft} дн.`, "error");
+      return false;
+    }
+    return true;
   }
 
   function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -53,7 +82,6 @@ export function MeasurementsSection() {
     if (!file) return;
     setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
-    // Reset input value so same file can be re-selected
     e.target.value = "";
   }
 
@@ -61,19 +89,17 @@ export function MeasurementsSection() {
     setCountdown(3);
     const interval = setInterval(() => {
       setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          cameraInputRef.current?.click();
-          return 0;
-        }
+        if (prev <= 1) { clearInterval(interval); cameraInputRef.current?.click(); return 0; }
         return prev - 1;
       });
     }, 1000);
   }
 
-  function clearPhoto() {
-    setPhotoFile(null);
-    setPhotoPreview(null);
+  function clearPhoto() { setPhotoFile(null); setPhotoPreview(null); }
+
+  async function openSheet() {
+    const ok = await checkCanAdd();
+    if (ok) { setSheetOpen(true); }
   }
 
   async function save() {
@@ -118,67 +144,53 @@ export function MeasurementsSection() {
     showToast("Виміри збережено ✓");
   }
 
-  const latest = measurements[0];
-  const daysSince = latest ? differenceInDays(new Date(), new Date(latest.date)) : null;
-  const chartData = [...measurements].reverse().slice(-20).map((m) => ({
-    date: m.date.slice(5),
-    weight: m.weight_kg,
-  }));
+  async function deleteMeasurement(id: string) {
+    if (!confirm("Видалити цей запис?")) return;
+    await supabase.from("body_measurements").delete().eq("id", id);
+    await load();
+  }
 
   return (
     <div className="space-y-4 pb-6">
-      {/* Last measurement */}
-      <div className="bg-[#111111] rounded-2xl p-4">
-        {latest ? (
-          <>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-white font-semibold">Останні заміри</p>
-              <span className="text-[#6b7280] text-xs">
-                {daysSince === 0 ? "сьогодні" : `${daysSince} дн тому`}
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {FIELDS.map(({ key, label, unit }) => {
-                const val = latest[key];
-                if (!val) return null;
-                return (
-                  <div key={key} className="bg-[#1a1a1a] rounded-xl p-2 text-center">
-                    <p className="text-white font-bold text-sm">{val as number}{unit}</p>
-                    <p className="text-[#6b7280] text-xs">{label}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        ) : (
-          <p className="text-[#6b7280] text-sm text-center py-2">Ще немає замірів</p>
-        )}
-        {daysSince !== null && daysSince >= 7 && (
-          <div className="mt-3 bg-[#f59e0b]/10 border border-[#f59e0b]/30 rounded-xl px-3 py-2">
-            <p className="text-[#f59e0b] text-xs">⚠️ Час зробити тижневі заміри!</p>
-          </div>
-        )}
-      </div>
-
       <Button
-        onClick={() => setSheetOpen(true)}
+        onClick={openSheet}
         className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl"
       >
-        Внести заміри
+        + Внести заміри
       </Button>
 
-      {/* Weight chart */}
-      {chartData.length > 1 && (
-        <div className="bg-[#111111] rounded-2xl p-4">
-          <p className="text-white font-semibold mb-3">Вага (кг)</p>
-          <ResponsiveContainer width="100%" height={120}>
-            <LineChart data={chartData}>
-              <XAxis dataKey="date" tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
-              <Tooltip contentStyle={{ background: "#1a1a1a", border: "none", borderRadius: "12px", color: "white", fontSize: 12 }} />
-              <Line type="monotone" dataKey="weight" stroke="#00FF85" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+      {/* History list — newest first */}
+      {measurements.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-4xl mb-3">📏</p>
+          <p className="text-[#6b7280] text-sm">Ще немає замірів</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {measurements.map((m) => (
+            <div key={m.id} className="bg-[#111111] rounded-2xl p-4">
+              <div className="flex justify-between items-center mb-3">
+                <p className="text-white font-semibold text-sm">
+                  {new Date(m.date).toLocaleDateString("uk-UA", { day: "numeric", month: "long", year: "numeric" })}
+                </p>
+                <button onClick={() => deleteMeasurement(m.id)} className="text-[#6b7280] active:text-[#ef4444] p-1">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {m.weight_kg && <MeasRow label="Вага" value={`${m.weight_kg} кг`} />}
+                {m.waist_cm && <MeasRow label="Талія" value={`${m.waist_cm} см`} />}
+                {m.chest_cm && <MeasRow label="Груди" value={`${m.chest_cm} см`} />}
+                {m.bicep_cm && <MeasRow label="Біцепс" value={`${m.bicep_cm} см`} />}
+                {m.shoulders_cm && <MeasRow label="Плечі" value={`${m.shoulders_cm} см`} />}
+                {m.legs_cm && <MeasRow label="Ноги" value={`${m.legs_cm} см`} />}
+              </div>
+              {m.photo_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.photo_url} alt="progress" className="w-full h-[160px] object-cover rounded-xl mt-3" />
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -204,47 +216,24 @@ export function MeasurementsSection() {
             ))}
           </div>
 
-          {/* Hidden file inputs */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handlePhotoSelect}
-          />
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="hidden"
-            onChange={handlePhotoSelect}
-          />
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoSelect} />
+          <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoSelect} />
 
-          {/* Photo section */}
           {!photoPreview ? (
             <div className="mt-2">
-              <p className="text-sm text-gray-400 mb-3">Фото прогресу</p>
+              <p className="text-sm text-[#6b7280] mb-3">Фото прогресу</p>
               <div className="grid grid-cols-2 gap-3">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5"
-                >
+                <button onClick={() => fileInputRef.current?.click()}
+                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5">
                   <span className="text-2xl">🖼️</span>
-                  <span className="text-xs text-gray-500">З галереї</span>
+                  <span className="text-xs text-[#6b7280]">З галереї</span>
                 </button>
-                <button
-                  onClick={startTimerPhoto}
-                  disabled={countdown > 0}
-                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5"
-                >
+                <button onClick={startTimerPhoto} disabled={countdown > 0}
+                  className="h-[80px] bg-[#1a1a1a] rounded-2xl flex flex-col items-center justify-center gap-1 border border-white/5">
                   {countdown > 0 ? (
                     <span className="text-3xl font-bold text-[#00FF85]">{countdown}</span>
                   ) : (
-                    <>
-                      <span className="text-2xl">📸</span>
-                      <span className="text-xs text-gray-500">Таймер 3с</span>
-                    </>
+                    <><span className="text-2xl">📸</span><span className="text-xs text-[#6b7280]">Таймер 3с</span></>
                   )}
                 </button>
               </div>
@@ -253,20 +242,14 @@ export function MeasurementsSection() {
             <div className="relative mt-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={photoPreview} alt="preview" className="w-full h-[180px] object-cover rounded-2xl" />
-              <button
-                onClick={clearPhoto}
-                className="absolute top-2 right-2 w-8 h-8 bg-black/60 rounded-full flex items-center justify-center text-white text-sm"
-              >
+              <button onClick={clearPhoto}
+                className="absolute top-2 right-2 w-8 h-8 bg-black/60 rounded-full flex items-center justify-center text-white text-sm">
                 ✕
               </button>
             </div>
           )}
 
-          <Button
-            onClick={save}
-            disabled={saving}
-            className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl mt-2"
-          >
+          <Button onClick={save} disabled={saving} className="w-full h-12 bg-[#00FF85] text-black font-bold rounded-2xl mt-2">
             {saving ? "Збереження..." : "Зберегти"}
           </Button>
         </div>
